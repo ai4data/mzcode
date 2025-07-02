@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "metazensecode"
+version = "1.0.0"
+description = "Enterprise-grade SSIS metadata extraction and analysis tool with AI-powered business logic understanding"
+authors = [
+    {name = "MetaZense Team", email = "info@metazense.com"}
+]
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.8"
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators", 
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Database",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Systems Administration",
+]
+dependencies = [
+    "click>=8.0.0",
+    "networkx>=2.8.0",
+    "lxml>=4.9.0",
+    "pydantic>=2.0.0",
+    "numpy>=1.20.0",
+    "rank_bm25>=0.2.2",
+    "anthropic>=0.21.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.scripts]
+metazcode = "metazcode.cli.commands:cli"
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["metazcode*"]
+exclude = ["tests*"] 
