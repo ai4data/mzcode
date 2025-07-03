@@ -407,5 +407,240 @@ def ingest_n_index(path: str, index_output: Optional[str], project_id: Optional[
         click.echo(traceback.format_exc(), err=True)
 
 
+@cli.command()
+@click.option(
+    "--path",
+    default=".",
+    help="The path to the project directory or a specific file to process.",
+)
+@click.option(
+    "--output",
+    default=None,
+    type=click.Path(dir_okay=False, writable=True),
+    help="Path to save the analysis results JSON file.",
+)
+@click.option(
+    "--index-output",
+    default=None,
+    help="Path to save the index file (optional).",
+)
+@click.option(
+    "--project-id",
+    default=None,
+    help="Project identifier for the index (optional).",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Enable verbose logging to see detailed progress.",
+)
+def full(path: str, output: Optional[str], index_output: Optional[str], project_id: Optional[str], verbose: bool):
+    """
+    Complete SSIS analysis: ingest + analyze + index in one command.
+    
+    This command performs the full MetaZenseCode workflow:
+    1. Ingests SSIS packages and extracts business logic
+    2. Performs cross-package dependency analysis
+    3. Creates enhanced searchable index
+    4. Exports rich graph with enterprise intelligence
+    
+    Perfect for users who want complete SSIS analysis without running separate commands.
+    
+    Example: metazcode full --path ./data/ssis/project --output analysis.json
+    """
+    # Setup logging
+    if verbose:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+    
+    click.echo("Starting Complete SSIS Analysis (Ingest + Analyze + Index)")
+    click.echo("=" * 70)
+    click.echo(f"Project path: {os.path.abspath(path)}")
+    
+    # Validate path
+    p = Path(path)
+    root_path: str
+    target_file: Optional[str] = None
+    
+    if p.is_dir():
+        root_path = str(p.resolve())
+    elif p.is_file():
+        root_path = str(p.parent.resolve())
+        target_file = str(p.resolve())
+    else:
+        click.echo(f"[ERROR] Path '{path}' not found.", err=True)
+        return
+    
+    try:
+        # Phase 1: Ingestion
+        click.echo("")
+        click.echo("Phase 1: SSIS Ingestion (Building Graph)")
+        click.echo("-" * 50)
+        
+        graph_client = GraphClientBuilder.get_client()
+        orchestrator = Orchestrator(
+            graph_client=graph_client, root_path=root_path, target_file=target_file
+        )
+        orchestrator.run()
+        
+        initial_nodes = graph_client.get_node_count()
+        initial_edges = graph_client.get_edge_count()
+        click.echo(f"Ingestion complete: {initial_nodes} nodes, {initial_edges} edges")
+        
+        # Phase 2: Cross-Package Analysis
+        click.echo("")
+        click.echo("Phase 2: Cross-Package Analysis (Enterprise Intelligence)")
+        click.echo("-" * 50)
+        
+        from metazcode.sdk.analysis.cross_package_analyzer import CrossPackageAnalyzer
+        analyzer = CrossPackageAnalyzer(graph_client)
+        analysis_results = analyzer.analyze()
+        
+        final_nodes = graph_client.get_node_count()
+        final_edges = graph_client.get_edge_count()
+        new_edges = final_edges - initial_edges
+        
+        click.echo(f"Analysis complete:")
+        click.echo(f"   Packages analyzed: {analysis_results['packages_analyzed']}")
+        click.echo(f"   Cross-package edges added: {new_edges}")
+        click.echo(f"   Shared tables: {analysis_results['shared_resources']['tables']}")
+        click.echo(f"   Shared connections: {analysis_results['shared_resources']['connections']}")
+        
+        # Show execution order
+        execution_order = analysis_results['detailed_analysis']['execution_order']
+        if len(execution_order) > 1:
+            click.echo(f"")
+            click.echo(f"Execution Order:")
+            for level, packages in enumerate(execution_order, 1):
+                package_names = [pkg.split(':')[1] if ':' in pkg else pkg for pkg in packages]
+                click.echo(f"   Level {level}: {', '.join(package_names)}")
+        else:
+            click.echo(f"All packages can execute in parallel")
+        
+        # Show warnings
+        contention_risks = analysis_results['contention_risks']
+        if contention_risks['high_risk_connections']:
+            click.echo(f"")
+            click.echo(f"High-Risk Resources:")
+            for risk in contention_risks['high_risk_connections']:
+                click.echo(f"   {risk['connection']}: {risk['package_count']} packages")
+        
+        # Phase 3: Enhanced Indexing
+        click.echo("")
+        click.echo("Phase 3: Enhanced Indexing (Search Capabilities)")
+        click.echo("-" * 50)
+        
+        integration = IndexIntegration()
+        
+        # Run indexing on the already enhanced graph
+        index = integration._build_enhanced_index(graph_client, project_id)
+        
+        # Save index if requested
+        index_path = None
+        metadata_path = None
+        if index_output:
+            index_path, metadata_path = integration._save_index(index, index_output)
+        
+        # Generate index results summary
+        integration_results = integration._generate_results_summary(graph_client, index, index_path, metadata_path)
+        index_results = integration_results['index_results']
+        
+        click.echo(f"Indexing complete:")
+        click.echo(f"   Indexed nodes: {index_results['node_count']}")
+        click.echo(f"   Unique names: {index_results['unique_names']}")
+        click.echo(f"   BM25 metadata ready: {index_results['bm25_metadata_ready']}")
+        click.echo(f"   BM25 content ready: {index_results['bm25_content_ready']}")
+        
+        # Check if SSIS enhanced index has additional stats
+        if hasattr(index, 'get_ssis_enhancement_stats'):
+            ssis_stats = index.get_ssis_enhancement_stats()
+            if ssis_stats:
+                click.echo(f"")
+                click.echo(f"SSIS Business Logic Indexing:")
+                click.echo(f"   SQL operations: {ssis_stats.get('sql_operations_indexed', 0)}")
+                click.echo(f"   Shared tables: {ssis_stats.get('shared_tables_indexed', 0)}")
+                click.echo(f"   Parameterized connections: {ssis_stats.get('parameterized_connections_indexed', 0)}")
+                click.echo(f"   Cross-package pipelines: {ssis_stats.get('cross_package_pipelines_indexed', 0)}")
+        
+        # Save outputs
+        click.echo("")
+        click.echo("Saving Results")
+        click.echo("-" * 50)
+        
+        # Save analysis results if requested
+        if output:
+            output_path = Path(output)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(output_path, "w") as f:
+                json.dump(analysis_results, f, indent=2, default=str)
+            click.echo(f"Analysis results: {output_path.resolve()}")
+        
+        # Always save enhanced graph
+        enhanced_graph_path = Path("enhanced_graph_full_analysis.json")
+        graph = graph_client.get_graph()
+        graph_data = nx.node_link_data(graph, edges="links")
+        
+        def default_serializer(o):
+            if isinstance(o, (set, tuple)):
+                return list(o)
+            if hasattr(o, "to_dict"):
+                return o.to_dict()
+            try:
+                return str(o)
+            except TypeError:
+                return repr(o)
+        
+        with open(enhanced_graph_path, "w") as f:
+            json.dump(graph_data, f, indent=2, default=default_serializer)
+        
+        click.echo(f"Enhanced graph: {enhanced_graph_path.resolve()}")
+        
+        # Show index files if created
+        if index_path:
+            click.echo(f"Index file: {index_path}")
+        if metadata_path:
+            click.echo(f"Metadata file: {metadata_path}")
+        
+        # Final summary
+        click.echo("")
+        click.echo("COMPLETE ANALYSIS FINISHED!")
+        click.echo("=" * 70)
+        click.echo(f"Graph: {final_nodes} nodes, {final_edges} edges ({new_edges} cross-package)")
+        click.echo(f"Intelligence: Business logic + Dependencies + Search ready")
+        click.echo(f"Ready for: Migration planning, AI agents, Enterprise coordination")
+        click.echo("")
+        click.echo("Next steps:")
+        click.echo("  Review analysis results in the generated JSON files")
+        click.echo("  Use the enhanced graph for migration planning")
+        click.echo("  Feed the rich metadata to AI migration agents")
+        
+    except Exception as e:
+        click.echo(f"[ERROR] Error during complete analysis: {e}", err=True)
+        if verbose:
+            import traceback
+            click.echo(traceback.format_exc(), err=True)
+
+
+# Alias command for shorter usage
+@cli.command()
+@click.option("--path", default=".", help="The path to the project directory.")
+@click.option("--output", default=None, help="Path to save analysis results.")
+@click.option("--verbose", "-v", is_flag=True, help="Enable verbose logging.")
+def complete(path: str, output: Optional[str], verbose: bool):
+    """
+    Alias for 'full' command - complete SSIS analysis in one shot.
+    
+    Shorter command for: ingest + analyze + index
+    
+    Example: metazcode complete --path ./data/ssis/project
+    """
+    # Call the full command with default parameters
+    from click import Context
+    ctx = Context(full)
+    ctx.invoke(full, path=path, output=output, index_output=None, project_id=None, verbose=verbose)
+
+
 if __name__ == "__main__":
     cli()
