@@ -206,6 +206,14 @@ class CanonicalSsisParser:
                     connection_id_map,
                     param_var_id_map,
                 )
+            elif "ScriptTaskData" in task_type or "ScriptProject" in task_type:
+                self._parse_script_task(
+                    object_data_xml,
+                    task_id,
+                    nodes,
+                    edges,
+                    param_var_id_map,
+                )
             else:
                 logger.debug(
                     f"DEBUG: Unhandled task type: '{task_type}' for task: '{task_name}'"
@@ -992,6 +1000,167 @@ class CanonicalSsisParser:
                         sql_command, task_id, edges, param_var_id_map
                     )
 
+    def _parse_script_task(
+        self,
+        object_data_xml: etree._Element,
+        task_id: str,
+        nodes: List[Node],
+        edges: List[Edge],
+        param_var_id_map: Dict[str, str],
+    ):
+        """
+        Parse Microsoft.ScriptTask components to extract script code and logic.
+        This handles VB.NET and C# code embedded in Script Tasks.
+        """
+        # Script tasks can have different XML structures: ScriptTaskData or ScriptProject
+        script_task_data_xml = None
+        
+        # Try direct element names first
+        script_task_data_xml = object_data_xml.find("ScriptTaskData")
+        if script_task_data_xml is None:
+            script_task_data_xml = object_data_xml.find("ScriptProject")
+        
+        if script_task_data_xml is None:
+            # Try scanning all children for script-related elements
+            for child in object_data_xml:
+                child_tag = child.tag.lower()
+                if "scripttaskdata" in child_tag or "scriptproject" in child_tag:
+                    script_task_data_xml = child
+                    break
+        
+        if script_task_data_xml is None:
+            logger.debug(f"No ScriptTaskData or ScriptProject found in Script Task {task_id}")
+            return
+
+        logger.debug(f"Parsing Script Task: {task_id}")
+
+        # Extract script information
+        script_info = {
+            "task_name": task_id.split(":")[-1],
+            "script_language": "VB.NET",  # Default, will be updated if found
+            "script_code": "",
+            "referenced_variables": [],
+            "readonly_variables": [],
+            "readwrite_variables": [],
+            "referenced_assemblies": [],
+            "imports": [],
+            "has_custom_code": False,
+            "script_project_name": "",
+            "entry_point": "Main"
+        }
+
+        # Extract script language - handle both ScriptTaskData and ScriptProject formats
+        script_language = (script_task_data_xml.get("ScriptLanguage") or 
+                          script_task_data_xml.get("scriptLanguage") or
+                          script_task_data_xml.get("Language"))
+        if script_language:
+            # Map language names
+            language_map = {
+                "VisualBasic": "VB.NET",
+                "CSharp": "C#",
+                "VB": "VB.NET",
+                "CS": "C#"
+            }
+            script_info["script_language"] = language_map.get(script_language, script_language)
+            logger.debug(f"Script language: {script_info['script_language']}")
+
+        # Extract ReadOnlyVariables
+        readonly_vars = script_task_data_xml.get("ReadOnlyVariables") or script_task_data_xml.get("readOnlyVariables")
+        if readonly_vars:
+            script_info["readonly_variables"] = [var.strip() for var in readonly_vars.split(",")]
+            logger.debug(f"ReadOnly variables: {script_info['readonly_variables']}")
+
+        # Extract ReadWriteVariables
+        readwrite_vars = script_task_data_xml.get("ReadWriteVariables") or script_task_data_xml.get("readWriteVariables")
+        if readwrite_vars:
+            script_info["readwrite_variables"] = [var.strip() for var in readwrite_vars.split(",")]
+            logger.debug(f"ReadWrite variables: {script_info['readwrite_variables']}")
+
+        # Extract EntryPoint
+        entry_point = script_task_data_xml.get("EntryPoint") or script_task_data_xml.get("entryPoint")
+        if entry_point:
+            script_info["entry_point"] = entry_point
+
+        # Extract ScriptProjectName - handle both formats
+        script_project = (script_task_data_xml.get("ScriptProjectName") or 
+                         script_task_data_xml.get("scriptProjectName") or
+                         script_task_data_xml.get("Name"))
+        if script_project:
+            script_info["script_project_name"] = script_project
+
+        # Extract VSTA version information if available
+        vsta_major = script_task_data_xml.get("VSTAMajorVersion")
+        vsta_minor = script_task_data_xml.get("VSTAMinorVersion")
+        if vsta_major and vsta_minor:
+            script_info["vsta_version"] = f"{vsta_major}.{vsta_minor}"
+            logger.debug(f"VSTA Version: {script_info['vsta_version']}")
+
+        # Enhanced script code extraction with comprehensive location scanning
+        script_info["script_code"] = self._extract_script_source_code(script_task_data_xml, task_id)
+        if script_info["script_code"]:
+            script_info["has_custom_code"] = True
+            logger.debug(f"Extracted {len(script_info['script_code'])} characters of script code")
+            
+            # Analyze script dependencies and complexity
+            script_analysis = self._analyze_script_content(script_info["script_code"], script_info["script_language"])
+            script_info.update(script_analysis)
+
+        # Extract referenced assemblies from script project
+        assemblies_elem = script_task_data_xml.find(".//References") or script_task_data_xml.find(".//AssemblyReferences")
+        if assemblies_elem is not None:
+            for assembly_elem in assemblies_elem.findall(".//Reference"):
+                assembly_name = assembly_elem.get("AssemblyName") or assembly_elem.text
+                if assembly_name:
+                    script_info["referenced_assemblies"].append(assembly_name)
+
+        # Combine all variable references for dependency tracking
+        all_variables = script_info["readonly_variables"] + script_info["readwrite_variables"]
+        script_info["referenced_variables"] = all_variables
+
+        # Create dependency edges for referenced variables
+        for var_name in all_variables:
+            if var_name and var_name.strip():
+                # Clean variable name (remove User:: prefix if present)
+                clean_var_name = var_name.replace("User::", "").strip()
+                var_id = f"variable:{clean_var_name}"
+                
+                # Check if variable exists in our mapping
+                if var_id in param_var_id_map.values():
+                    edges.append(
+                        Edge(
+                            source_id=task_id,
+                            target_id=var_id,
+                            relation=EdgeType.USES_VARIABLE,
+                        )
+                    )
+                    logger.debug(f"Created variable dependency: {task_id} -> {var_id}")
+
+        # Parse any expressions in the script code for additional dependencies
+        if script_info["script_code"]:
+            self._parse_expression_dependencies(
+                script_info["script_code"], task_id, edges, param_var_id_map
+            )
+
+        # Store script information in the operation node properties
+        operation_node = next((n for n in nodes if n.node_id == task_id), None)
+        if operation_node:
+            operation_node.properties["custom_script"] = script_info
+            
+            # Also store a summary for quick access
+            operation_node.properties["script_summary"] = {
+                "language": script_info["script_language"],
+                "has_code": script_info["has_custom_code"],
+                "variable_count": len(script_info["referenced_variables"]),
+                "assembly_count": len(script_info["referenced_assemblies"]),
+                "code_length": len(script_info["script_code"]) if script_info["script_code"] else 0
+            }
+
+            logger.debug(
+                f"Added Script Task logic to {task_id}: {script_info['script_language']} "
+                f"with {len(script_info['referenced_variables'])} variables, "
+                f"{len(script_info['script_code'])} chars of code"
+            )
+
     def _extract_error_handling_config(
         self,
         component_xml: etree._Element,
@@ -1718,3 +1887,265 @@ class CanonicalSsisParser:
             logger.debug(
                 f"Generic component {component_name} has {len(column_lineage['column_mappings'])} column mappings"
             )
+
+    def _extract_script_source_code(self, script_task_data_xml: etree._Element, task_id: str) -> str:
+        """
+        Enhanced script code extraction with comprehensive location and namespace scanning.
+        Handles multiple SSIS script storage formats including SQLTask namespace variants.
+        """
+        script_code = ""
+        
+        # Strategy 1: Look for SQLTask namespace elements (reviewer's format)
+        try:
+            # Check for SQLTask:ScriptCode elements
+            sqltask_script_code = script_task_data_xml.find("SQLTask:ScriptCode", self.ns_map)
+            if sqltask_script_code is not None and sqltask_script_code.text:
+                script_code = sqltask_script_code.text.strip()
+                logger.debug(f"Found script code in SQLTask:ScriptCode: {len(script_code)} chars")
+                return script_code
+                
+            # Check for nested SQLTask:ScriptProject/SQLTask:ScriptCode
+            sqltask_project = script_task_data_xml.find("SQLTask:ScriptProject", self.ns_map)
+            if sqltask_project is not None:
+                sqltask_script_code = sqltask_project.find("SQLTask:ScriptCode", self.ns_map)
+                if sqltask_script_code is not None and sqltask_script_code.text:
+                    script_code = sqltask_script_code.text.strip()
+                    logger.debug(f"Found script code in SQLTask:ScriptProject/ScriptCode: {len(script_code)} chars")
+                    return script_code
+        except Exception as e:
+            logger.debug(f"SQLTask namespace search failed: {e}")
+        
+        # Strategy 2: Look for standard script storage locations
+        script_code_locations = [
+            # Direct code elements
+            "ScriptCode",
+            "SourceCode", 
+            "Code",
+            # Storage containers
+            "VSTAScriptProjectStorage",
+            "ScriptStorage", 
+            "BinaryCodeStorage",
+            "ProjectStorage",
+            # Nested paths
+            ".//ScriptCode",
+            ".//SourceCode",
+            ".//Code"
+        ]
+        
+        for location in script_code_locations:
+            try:
+                script_storage = script_task_data_xml.find(location)
+                if script_storage is not None:
+                    # Try to extract direct text content
+                    if script_storage.text and script_storage.text.strip():
+                        script_code = script_storage.text.strip()
+                        logger.debug(f"Found script code in {location}: {len(script_code)} chars")
+                        return script_code
+                    
+                    # Look for nested elements that might contain code
+                    for child in script_storage:
+                        if child.text and len(child.text.strip()) > 20:  # Likely code content
+                            script_code = child.text.strip()
+                            logger.debug(f"Found script code in {location}/{child.tag}: {len(script_code)} chars")
+                            return script_code
+            except Exception as e:
+                logger.debug(f"Script location {location} search failed: {e}")
+        
+        # Strategy 3: Look for base64 encoded or CDATA script content
+        try:
+            # Check for CDATA sections that might contain encoded script
+            for element in script_task_data_xml.iter():
+                if element.text and ("Sub Main" in element.text or "void Main" in element.text or 
+                                   "Public Sub" in element.text or "public void" in element.text):
+                    script_code = element.text.strip()
+                    logger.debug(f"Found script code in CDATA/text content: {len(script_code)} chars")
+                    return script_code
+        except Exception as e:
+            logger.debug(f"CDATA search failed: {e}")
+        
+        # Strategy 4: Look for any text content that looks like code
+        try:
+            all_text = etree.tostring(script_task_data_xml, encoding='unicode', method='text')
+            if all_text:
+                # Look for common code patterns
+                code_patterns = [
+                    r'Public Sub Main\(\).*?End Sub',
+                    r'public void Main\(\).*?\}',
+                    r'Sub Main\(\).*?End Sub',
+                    r'void Main\(\).*?\}'
+                ]
+                
+                for pattern in code_patterns:
+                    matches = re.findall(pattern, all_text, re.DOTALL | re.IGNORECASE)
+                    if matches:
+                        script_code = matches[0].strip()
+                        logger.debug(f"Found script code via pattern matching: {len(script_code)} chars")
+                        return script_code
+        except Exception as e:
+            logger.debug(f"Pattern matching search failed: {e}")
+        
+        if not script_code:
+            logger.debug(f"No script code found in Script Task {task_id}")
+        
+        return script_code
+
+    def _analyze_script_content(self, script_code: str, language: str) -> Dict[str, Any]:
+        """
+        Analyze script content to extract dependencies, complexity, and business logic patterns.
+        """
+        analysis = {
+            "script_dependencies": [],
+            "entry_points": [],
+            "code_complexity": "unknown",
+            "has_error_handling": False,
+            "uses_database": False,
+            "uses_file_system": False,
+            "uses_web_services": False,
+            "custom_functions": [],
+            "exception_types": [],
+            "code_lines": 0,
+            "comment_lines": 0
+        }
+        
+        if not script_code:
+            return analysis
+        
+        lines = script_code.split('\n')
+        analysis["code_lines"] = len(lines)
+        
+        # Language-specific analysis
+        if language.upper() in ["VB.NET", "VB", "VISUALBASIC"]:
+            analysis.update(self._analyze_vb_script(script_code, lines))
+        elif language.upper() in ["C#", "CSHARP"]:
+            analysis.update(self._analyze_csharp_script(script_code, lines))
+        
+        # Common dependency patterns across languages
+        dependency_patterns = {
+            "Dts.Variables": "SSIS Variables",
+            "Dts.Connections": "SSIS Connections", 
+            "Dts.Events": "SSIS Events",
+            "Dts.Log": "SSIS Logging",
+            "Dts.TaskResult": "Task Result",
+            "System.Data": "Database Operations",
+            "System.IO": "File System Operations",
+            "System.Net": "Network Operations",
+            "System.Web": "Web Services",
+            "SqlConnection": "SQL Server Connection",
+            "OleDbConnection": "OLE DB Connection",
+            "FileStream": "File Operations",
+            "HttpClient": "HTTP Client"
+        }
+        
+        for pattern, description in dependency_patterns.items():
+            if pattern in script_code:
+                analysis["script_dependencies"].append({
+                    "pattern": pattern,
+                    "description": description,
+                    "type": "framework_dependency"
+                })
+        
+        # Complexity analysis
+        complexity_indicators = {
+            "low": ["ScriptResults.Success", "ScriptResults.Failure"],
+            "medium": ["Try", "Catch", "For", "While", "If"],
+            "high": ["Class", "Function", "Sub", "Method", "Threading", "Async"]
+        }
+        
+        complexity_score = 0
+        for level, indicators in complexity_indicators.items():
+            for indicator in indicators:
+                if indicator in script_code:
+                    if level == "low":
+                        complexity_score += 1
+                    elif level == "medium":
+                        complexity_score += 3
+                    elif level == "high":
+                        complexity_score += 5
+        
+        if complexity_score <= 3:
+            analysis["code_complexity"] = "low"
+        elif complexity_score <= 10:
+            analysis["code_complexity"] = "medium"
+        else:
+            analysis["code_complexity"] = "high"
+        
+        # Feature detection
+        analysis["has_error_handling"] = any(pattern in script_code.upper() 
+                                           for pattern in ["TRY", "CATCH", "ON ERROR", "ERROR HANDLING"])
+        analysis["uses_database"] = any(pattern in script_code 
+                                      for pattern in ["SqlConnection", "OleDbConnection", "System.Data"])
+        analysis["uses_file_system"] = any(pattern in script_code 
+                                         for pattern in ["System.IO", "FileStream", "File."])
+        analysis["uses_web_services"] = any(pattern in script_code 
+                                          for pattern in ["HttpClient", "WebRequest", "System.Net"])
+        
+        logger.debug(f"Script analysis complete: {analysis['code_complexity']} complexity, "
+                    f"{len(analysis['script_dependencies'])} dependencies")
+        
+        return analysis
+
+    def _analyze_vb_script(self, script_code: str, lines: List[str]) -> Dict[str, Any]:
+        """VB.NET specific script analysis."""
+        analysis = {}
+        
+        # Find entry points
+        entry_points = []
+        for line in lines:
+            line_clean = line.strip()
+            if (line_clean.startswith("Public Sub ") or line_clean.startswith("Sub ")) and "(" in line_clean:
+                method_name = line_clean.split("Sub ")[1].split("(")[0].strip()
+                entry_points.append(method_name)
+        
+        analysis["entry_points"] = entry_points
+        
+        # Count comment lines
+        comment_lines = sum(1 for line in lines if line.strip().startswith("'"))
+        analysis["comment_lines"] = comment_lines
+        
+        # Find custom functions
+        custom_functions = []
+        for line in lines:
+            line_clean = line.strip()
+            if (line_clean.startswith("Public Function ") or line_clean.startswith("Function ")) and "(" in line_clean:
+                func_name = line_clean.split("Function ")[1].split("(")[0].strip()
+                custom_functions.append(func_name)
+        
+        analysis["custom_functions"] = custom_functions
+        
+        return analysis
+
+    def _analyze_csharp_script(self, script_code: str, lines: List[str]) -> Dict[str, Any]:
+        """C# specific script analysis."""
+        analysis = {}
+        
+        # Find entry points
+        entry_points = []
+        for line in lines:
+            line_clean = line.strip()
+            if ("public void " in line_clean or "void " in line_clean) and "(" in line_clean:
+                parts = line_clean.split("void ")[1].split("(")
+                if parts:
+                    method_name = parts[0].strip()
+                    entry_points.append(method_name)
+        
+        analysis["entry_points"] = entry_points
+        
+        # Count comment lines
+        comment_lines = sum(1 for line in lines if line.strip().startswith("//"))
+        analysis["comment_lines"] = comment_lines
+        
+        # Find custom functions/methods
+        custom_functions = []
+        for line in lines:
+            line_clean = line.strip()
+            if ("public " in line_clean and "(" in line_clean and 
+                not "void Main(" in line_clean and "{" not in line_clean):
+                # Extract method name
+                parts = line_clean.split("(")[0].split()
+                if len(parts) >= 2:
+                    method_name = parts[-1].strip()
+                    custom_functions.append(method_name)
+        
+        analysis["custom_functions"] = custom_functions
+        
+        return analysis
