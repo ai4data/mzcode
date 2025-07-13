@@ -7,6 +7,7 @@ import json
 
 from ...models.canonical_types import NodeType, EdgeType
 from ...models.graph import Node, Edge
+from .type_mapping import SSISDataTypeMapper, TargetPlatform
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,8 @@ class CanonicalSsisParser:
         connections_context: Optional[Dict[str, Dict[str, Any]]] = None,
         parameters_context: Optional[Dict[str, Dict[str, Any]]] = None,
         enable_schema_introspection: bool = True,
+        enable_type_mapping: bool = True,
+        target_platforms: Optional[List[str]] = None,
     ):
         self.ns_map = {
             "DTS": "www.microsoft.com/SqlServer/Dts",
@@ -31,6 +34,11 @@ class CanonicalSsisParser:
         self.parameters_context = parameters_context or {}
         self.enable_schema_introspection = enable_schema_introspection
         self.schema_cache = {}  # Cache for database schema information
+        
+        # Initialize type mapping engine
+        self.enable_type_mapping = enable_type_mapping
+        self.type_mapper = SSISDataTypeMapper() if enable_type_mapping else None
+        self.target_platforms = self._parse_target_platforms(target_platforms or ["sql_server", "postgresql"])
 
     def _categorize_operation_subtype(self, native_type: str) -> str:
         """
@@ -282,6 +290,13 @@ class CanonicalSsisParser:
                         "conmgr_file": enrichment_data.get("file_path", ""),
                     }
                 )
+                
+                # Add platform detection and type mapping rules
+                if self.enable_type_mapping:
+                    platform_type = self._detect_platform_from_connection(enrichment_data)
+                    if platform_type:
+                        properties["platform_type"] = platform_type.value
+                        properties["type_mapping_rules"] = self._get_platform_type_rules(platform_type)
                 logger.debug(
                     f"Enriched connection '{conn_name}' with server='{enrichment_data.get('server')}', database='{enrichment_data.get('database')}'"
                 )
@@ -442,12 +457,30 @@ class CanonicalSsisParser:
                             else expression
                         )
 
+                        # Enrich with type mapping properties
+                        type_properties = {}
+                        if self.enable_type_mapping and self.type_mapper:
+                            ssis_type = output_column.get("dataType", "")
+                            length = output_column.get("length", "")
+                            precision = output_column.get("precision", "")
+                            scale = output_column.get("scale", "")
+                            
+                            if ssis_type:
+                                type_properties = self.type_mapper.enrich_column_properties(
+                                    ssis_type=ssis_type,
+                                    length=length,
+                                    precision=precision, 
+                                    scale=scale,
+                                    target_platforms=self.target_platforms
+                                )
+
                         transformation = {
                             "column_name": column_name,
                             "expression": expression,
                             "friendly_expression": friendly_expression,
                             "data_type": output_column.get("dataType", ""),
                             "length": output_column.get("length", ""),
+                            **type_properties  # Add type mapping properties
                         }
                         transformations.append(transformation)
 
@@ -710,11 +743,16 @@ class CanonicalSsisParser:
             table_name = table_name.strip("[]")
             table_id = f"table:{table_name}"
             if not any(n.node_id == table_id for n in nodes):
-                # Enhanced table properties with schema introspection
+                # Enhanced table properties with schema introspection and platform mapping
                 table_properties = {
                     "technology": "SSIS",
                     "table_name": table_name
                 }
+                
+                # Add platform type mapping support for table-level operations
+                if self.enable_type_mapping and self.target_platforms:
+                    table_properties["supported_platforms"] = [p.value for p in self.target_platforms]
+                    table_properties["type_mapping_enabled"] = True
                 
                 # Add schema introspection if connection context is available
                 if conn_guid and conn_guid in self.connections_context:
@@ -1293,7 +1331,7 @@ class CanonicalSsisParser:
     def _parse_package_parameters(
         self, root: etree._Element, file_path: str
     ) -> Tuple[List[Node], Dict[str, str]]:
-        """
+        r"""
         Parses package parameters from DTS:PackageParameters section.
         Returns parameter nodes and a mapping from parameter GUIDs to node IDs.
         """
@@ -1484,11 +1522,24 @@ class CanonicalSsisParser:
                                 "property[@name='JoinToReferenceColumn']"
                             )
                             if join_to_ref_prop is not None and join_to_ref_prop.text:
+                                # Enrich join condition with type mapping
+                                ssis_type = input_column.get("cachedDataType", "")
+                                length = input_column.get("cachedLength", "")
+                                type_properties = {}
+                                
+                                if self.enable_type_mapping and self.type_mapper and ssis_type:
+                                    type_properties = self.type_mapper.enrich_column_properties(
+                                        ssis_type=ssis_type,
+                                        length=length,
+                                        target_platforms=self.target_platforms
+                                    )
+
                                 join_condition = {
                                     "input_column": column_name,
                                     "reference_column": join_to_ref_prop.text,
-                                    "data_type": input_column.get("cachedDataType", ""),
-                                    "length": input_column.get("cachedLength", ""),
+                                    "data_type": ssis_type,
+                                    "length": length,
+                                    **type_properties  # Add type mapping properties
                                 }
                                 lookup_info["join_conditions"].append(join_condition)
 
@@ -1520,10 +1571,21 @@ class CanonicalSsisParser:
                                 copy_from_ref_prop is not None
                                 and copy_from_ref_prop.text
                             ):
+                                # Enrich output column with type mapping
+                                ssis_type = output_column.get("dataType", "")
+                                type_properties = {}
+                                
+                                if self.enable_type_mapping and self.type_mapper and ssis_type:
+                                    type_properties = self.type_mapper.enrich_column_properties(
+                                        ssis_type=ssis_type,
+                                        target_platforms=self.target_platforms
+                                    )
+
                                 output_col = {
                                     "output_column": column_name,
                                     "reference_column": copy_from_ref_prop.text,
-                                    "data_type": output_column.get("dataType", ""),
+                                    "data_type": ssis_type,
+                                    **type_properties  # Add type mapping properties
                                 }
                                 lookup_info["output_columns"].append(output_col)
 
@@ -1624,6 +1686,15 @@ class CanonicalSsisParser:
                                         output_lineage_id = output_lineage_id[2:-1]
                                     break
 
+                        # Enrich input column with type mapping
+                        type_properties = {}
+                        if self.enable_type_mapping and self.type_mapper and data_type:
+                            type_properties = self.type_mapper.enrich_column_properties(
+                                ssis_type=data_type,
+                                length=length,
+                                target_platforms=self.target_platforms
+                            )
+
                         input_column = {
                             "column_name": col_name,
                             "input_name": input_name,
@@ -1631,6 +1702,7 @@ class CanonicalSsisParser:
                             "output_lineage_id": output_lineage_id,
                             "data_type": data_type,
                             "length": length,
+                            **type_properties  # Add type mapping properties
                         }
                         column_lineage["input_columns"].append(input_column)
 
@@ -1668,6 +1740,15 @@ class CanonicalSsisParser:
                                     expression = prop_xml.text
                                     break
 
+                        # Enrich output column with type mapping
+                        type_properties = {}
+                        if self.enable_type_mapping and self.type_mapper and data_type:
+                            type_properties = self.type_mapper.enrich_column_properties(
+                                ssis_type=data_type,
+                                length=length,
+                                target_platforms=self.target_platforms
+                            )
+
                         output_column = {
                             "column_name": col_name,
                             "output_name": output_name,
@@ -1675,6 +1756,7 @@ class CanonicalSsisParser:
                             "data_type": data_type,
                             "length": length,
                             "expression": expression,
+                            **type_properties  # Add type mapping properties
                         }
                         column_lineage["output_columns"].append(output_column)
 
@@ -1744,10 +1826,10 @@ class CanonicalSsisParser:
                         if param_value:
                             # Replace parameter reference with actual value in resolved expression
                             param_ref_patterns = [
-                                f"\$Project::{param_name}",
-                                f"\$Package::{param_name}",
-                                f"@[\$Project::{param_name}]",
-                                f"@[\$Package::{param_name}]"
+                                f"\\$Project::{param_name}",
+                                f"\\$Package::{param_name}",
+                                f"@[\\$Project::{param_name}]",
+                                f"@[\\$Package::{param_name}]"
                             ]
                             for ref_pattern in param_ref_patterns:
                                 result["resolved_expression"] = result["resolved_expression"].replace(
@@ -2149,3 +2231,78 @@ class CanonicalSsisParser:
         analysis["custom_functions"] = custom_functions
         
         return analysis
+    
+    def _parse_target_platforms(self, platform_names: List[str]) -> List[TargetPlatform]:
+        """Parse target platform names to enum values."""
+        platforms = []
+        platform_mapping = {
+            "sql_server": TargetPlatform.SQL_SERVER,
+            "postgresql": TargetPlatform.POSTGRESQL,
+            "mysql": TargetPlatform.MYSQL,
+            "oracle": TargetPlatform.ORACLE,
+            "snowflake": TargetPlatform.SNOWFLAKE,
+            "bigquery": TargetPlatform.BIGQUERY,
+            "azure_synapse": TargetPlatform.AZURE_SYNAPSE
+        }
+        
+        for name in platform_names:
+            platform = platform_mapping.get(name.lower())
+            if platform:
+                platforms.append(platform)
+            else:
+                logger.warning(f"Unknown target platform: {name}")
+        
+        return platforms or [TargetPlatform.SQL_SERVER]  # Default fallback
+    
+    def _detect_platform_from_connection(self, connection_data: Dict[str, Any]) -> Optional[TargetPlatform]:
+        """
+        Detect target platform from connection information.
+        """
+        provider = connection_data.get("provider", "").lower()
+        creation_name = connection_data.get("creation_name", "").lower()
+        connection_string = connection_data.get("connection_string", "").lower()
+        
+        # SQL Server detection
+        if any(keyword in provider for keyword in ["sqloledb", "sqlncli", "msoledbsql"]) or \
+           any(keyword in creation_name for keyword in ["oledb", "sql"]) or \
+           any(keyword in connection_string for keyword in ["sqlserver", "sql server"]):
+            return TargetPlatform.SQL_SERVER
+            
+        # PostgreSQL detection
+        if any(keyword in provider for keyword in ["postgresql", "npgsql"]) or \
+           any(keyword in connection_string for keyword in ["postgresql", "postgres"]):
+            return TargetPlatform.POSTGRESQL
+            
+        # MySQL detection
+        if any(keyword in provider for keyword in ["mysql"]) or \
+           any(keyword in connection_string for keyword in ["mysql"]):
+            return TargetPlatform.MYSQL
+            
+        # Oracle detection
+        if any(keyword in provider for keyword in ["oracle", "oraoledb"]) or \
+           any(keyword in connection_string for keyword in ["oracle"]):
+            return TargetPlatform.ORACLE
+            
+        # Default to SQL Server if uncertain
+        return TargetPlatform.SQL_SERVER
+    
+    def _get_platform_type_rules(self, platform: TargetPlatform) -> Dict[str, str]:
+        """
+        Get simplified type mapping rules for a platform.
+        """
+        if not self.type_mapper:
+            return {}
+            
+        # Common SSIS types and their platform mappings
+        common_ssis_types = [
+            "DT_I4", "DT_I8", "DT_WSTR", "DT_STR", "DT_DBTIMESTAMP", 
+            "DT_BOOL", "DT_R8", "DT_DECIMAL", "DT_GUID"
+        ]
+        
+        rules = {}
+        for ssis_type in common_ssis_types:
+            canonical_type = self.type_mapper.get_canonical_type(ssis_type)
+            platform_type = self.type_mapper.get_platform_type(canonical_type, platform)
+            rules[ssis_type] = platform_type
+            
+        return rules
