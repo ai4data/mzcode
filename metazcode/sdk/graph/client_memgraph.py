@@ -71,9 +71,17 @@ class MemgraphClient(GraphClientInterface):
         try:
             cursor = self._connection.cursor()
             cursor.execute(query, parameters or {})
-            return cursor.fetchall()
+            result = cursor.fetchall()
+            # Explicitly commit the transaction
+            self._connection.commit()
+            return result
         except Exception as e:
             logger.error(f"Query execution failed: {query}, error: {e}")
+            # Rollback on error
+            try:
+                self._connection.rollback()
+            except:
+                pass
             raise
 
     def write_node(self, node: Node):
@@ -94,12 +102,16 @@ class MemgraphClient(GraphClientInterface):
                 properties[key] = value
         
         # Build property string for Cypher query
-        prop_string = ", ".join([f"{key}: ${key}" for key in properties.keys()])
-        
-        query = f"""
-        MERGE (n {{id: $node_id}})
-        SET n += {{{prop_string}}}
-        """
+        if properties:
+            prop_string = ", ".join([f"{key}: ${key}" for key in properties.keys()])
+            query = f"""
+            MERGE (n {{id: $node_id}})
+            SET n += {{{prop_string}}}
+            """
+        else:
+            query = f"""
+            MERGE (n {{id: $node_id}})
+            """
         
         parameters = {"node_id": node_id, **properties}
         self._execute_query(query, parameters)
@@ -123,15 +135,27 @@ class MemgraphClient(GraphClientInterface):
                 properties[key] = value
         
         # Build property string for Cypher query
-        prop_string = ", ".join([f"{key}: ${key}" for key in properties.keys()])
+        # Use the relation property as the relationship type, default to EDGE
+        relation_type = properties.get('relation', 'EDGE').upper().replace(' ', '_')
         
-        query = f"""
-        MATCH (source {{id: $source_id}})
-        MATCH (target {{id: $target_id}})
-        MERGE (source)-[r:EDGE {{{prop_string}}}]->(target)
-        """
+        # Remove relation from properties since we're using it as the label
+        filtered_properties = {k: v for k, v in properties.items() if k != 'relation'}
         
-        parameters = {"source_id": source_id, "target_id": target_id, **properties}
+        if filtered_properties:
+            prop_string = ", ".join([f"{key}: ${key}" for key in filtered_properties.keys()])
+            query = f"""
+            MATCH (source {{id: $source_id}})
+            MATCH (target {{id: $target_id}})
+            MERGE (source)-[r:{relation_type} {{{prop_string}}}]->(target)
+            """
+        else:
+            query = f"""
+            MATCH (source {{id: $source_id}})
+            MATCH (target {{id: $target_id}})
+            MERGE (source)-[r:{relation_type}]->(target)
+            """
+        
+        parameters = {"source_id": source_id, "target_id": target_id, **filtered_properties}
         self._execute_query(query, parameters)
 
     def add_nodes(self, nodes: List[Node]):
@@ -227,12 +251,16 @@ class MemgraphClient(GraphClientInterface):
                 properties[key] = value
         
         # Build property string for Cypher query
-        prop_string = ", ".join([f"{key}: ${key}" for key in properties.keys()])
-        
-        query = f"""
-        MERGE (n {{id: $node_id}})
-        SET n += {{{prop_string}}}
-        """
+        if properties:
+            prop_string = ", ".join([f"{key}: ${key}" for key in properties.keys()])
+            query = f"""
+            MERGE (n {{id: $node_id}})
+            SET n += {{{prop_string}}}
+            """
+        else:
+            query = f"""
+            MERGE (n {{id: $node_id}})
+            """
         
         parameters = {"node_id": node_id, **properties}
         self._execute_query(query, parameters)
@@ -257,15 +285,27 @@ class MemgraphClient(GraphClientInterface):
                 properties[key] = value
         
         # Build property string for Cypher query
-        prop_string = ", ".join([f"{key}: ${key}" for key in properties.keys()])
+        # Use the relation property as the relationship type, default to EDGE
+        relation_type = properties.get('relation', 'EDGE').upper().replace(' ', '_')
         
-        query = f"""
-        MATCH (source {{id: $source}})
-        MATCH (target {{id: $target}})
-        MERGE (source)-[r:EDGE {{{prop_string}}}]->(target)
-        """
+        # Remove relation from properties since we're using it as the label
+        filtered_properties = {k: v for k, v in properties.items() if k != 'relation'}
         
-        parameters = {"source": source, "target": target, **properties}
+        if filtered_properties:
+            prop_string = ", ".join([f"{key}: ${key}" for key in filtered_properties.keys()])
+            query = f"""
+            MATCH (source {{id: $source}})
+            MATCH (target {{id: $target}})
+            MERGE (source)-[r:{relation_type} {{{prop_string}}}]->(target)
+            """
+        else:
+            query = f"""
+            MATCH (source {{id: $source}})
+            MATCH (target {{id: $target}})
+            MERGE (source)-[r:{relation_type}]->(target)
+            """
+        
+        parameters = {"source": source, "target": target, **filtered_properties}
         self._execute_query(query, parameters)
 
     def get_node_count(self) -> int:

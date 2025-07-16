@@ -116,22 +116,122 @@ After running analysis with Memgraph, you can verify the data was stored:
 
 1. **Check via Memgraph Lab**:
    - Open http://localhost:3000
-   - Run query: `MATCH (n) RETURN count(n) as node_count`
-   - Run query: `MATCH ()-[r]->() RETURN count(r) as edge_count`
+   - Connect to: `localhost:7687` (username: `""`, password: `""`)
 
-2. **Check via Command Line**:
+2. **Essential Verification Queries**:
+
+```cypher
+-- Quick Overview
+MATCH (n) RETURN count(n) as node_count;
+MATCH ()-[r]->() RETURN count(r) as relationship_count;
+
+-- View Node Types
+MATCH (n) RETURN n.node_type, count(n) as count ORDER BY count DESC;
+
+-- View Relationship Types
+MATCH ()-[r]->() RETURN type(r), count(r) as count ORDER BY count DESC;
+```
+
+3. **Explore SSIS Structure**:
+
+```cypher
+-- View All SSIS Packages
+MATCH (p) WHERE p.node_type = 'pipeline' RETURN p.name, p.id;
+
+-- View Package Dependencies
+MATCH (p1:pipeline)-[r:CONTAINS]->(op)-[r2]->(p2:pipeline) 
+RETURN p1.name, type(r2), p2.name;
+
+-- See Data Flow (Operations → Tables)
+MATCH (op)-[r:WRITES_TO|READS_FROM]->(table) 
+WHERE op.node_type = 'operation' AND table.node_type = 'table'
+RETURN op.name, type(r), table.name;
+```
+
+4. **Advanced Analysis Queries**:
+
+```cypher
+-- Find All Tables and Their Usage
+MATCH (table) 
+WHERE table.node_type = 'table' 
+OPTIONAL MATCH (op)-[r]->(table)
+RETURN table.name, 
+       collect(DISTINCT type(r)) as usage_types,
+       count(op) as operation_count
+ORDER BY operation_count DESC;
+
+-- Visualize Complete Data Lineage
+MATCH path = (pipeline)-[r1:CONTAINS]->(operation)-[r2:WRITES_TO|READS_FROM]->(table)
+RETURN path LIMIT 25;
+
+-- Find Complex Operations (with detailed metadata)
+MATCH (op) 
+WHERE op.node_type = 'operation' 
+AND op.properties CONTAINS 'column_lineage'
+RETURN op.name, op.properties LIMIT 5;
+```
+
+5. **Troubleshooting Queries**:
+
+```cypher
+-- Check if relationships are properly labeled
+MATCH ()-[r]->() 
+RETURN DISTINCT type(r) as relationship_types;
+
+-- Find nodes without relationships
+MATCH (n) 
+WHERE NOT (n)-[]-() 
+RETURN n.node_type, count(n) as isolated_count;
+
+-- View sample of everything
+MATCH (a)-[r]->(b) 
+RETURN a.name, type(r), b.name, 
+       a.node_type, b.node_type 
+LIMIT 10;
+```
+
+6. **Check via Command Line**:
 ```bash
 # Quick verification script
 uv run python -c "
 from metazcode.sdk.models.config import DatabaseConfig
 from metazcode.sdk.graph.client_memgraph import MemgraphClient
 
-config = DatabaseConfig(backend='memgraph', username='admin', password='admin')
+config = DatabaseConfig(backend='memgraph', host='localhost', port=7687, username='', password='')
 client = MemgraphClient(config)
 print(f'Nodes: {client.get_node_count()}')
 print(f'Edges: {client.get_edge_count()}')
 client.close()
 "
+```
+
+**Expected Results After Ingestion**:
+- **Nodes**: 10+ (pipelines, operations, tables)
+- **Relationships**: 8+ (CONTAINS, WRITES_TO, READS_FROM, PRECEDES)
+- **Relationship Types**: CONTAINS, WRITES_TO, READS_FROM, PRECEDES
+
+### Quick Reference - Most Useful Queries
+
+```cypher
+-- 🔍 QUICK OVERVIEW
+MATCH (n) RETURN count(n) as nodes;
+MATCH ()-[r]->() RETURN count(r) as relationships;
+
+-- 📊 VISUALIZE YOUR DATA
+MATCH path = (a)-[r]->(b) RETURN path LIMIT 25;
+
+-- 📋 LIST ALL PACKAGES
+MATCH (p) WHERE p.node_type = 'pipeline' RETURN p.name;
+
+-- 🔗 SEE DATA FLOW
+MATCH (op)-[r:WRITES_TO|READS_FROM]->(table) 
+RETURN op.name, type(r), table.name;
+
+-- ⚡ FIND BOTTLENECKS
+MATCH (table) WHERE table.node_type = 'table' 
+OPTIONAL MATCH (op)-[r]->(table)
+RETURN table.name, count(op) as usage_count
+ORDER BY usage_count DESC;
 ```
 
 ## 📊 What You Get
@@ -350,6 +450,72 @@ uv run python -m metazcode complete --path "MyETL_Project"
 ### Advanced Options  
 - `--index-output` - Save search index
 - `--project-id` - Custom project name
+
+## 🔧 Troubleshooting
+
+### Memgraph Connection Issues
+
+**Problem**: "Connection refused" or "Authentication failure"
+```bash
+# Check if Memgraph is running
+docker ps | grep memgraph
+
+# Start Memgraph if not running
+docker-compose up -d
+
+# Test connection
+uv run python -c "
+from metazcode.sdk.models.config import DatabaseConfig
+from metazcode.sdk.graph.client_memgraph import MemgraphClient
+try:
+    config = DatabaseConfig(backend='memgraph', host='localhost', port=7687, username='', password='')
+    client = MemgraphClient(config)
+    print('✓ Memgraph connection successful')
+    client.close()
+except Exception as e:
+    print(f'✗ Connection failed: {e}')
+"
+```
+
+**Problem**: "Can see nodes but not relationships in Memgraph Lab"
+```cypher
+-- Try these queries in Memgraph Lab:
+MATCH (a)-[r]->(b) RETURN a, r, b LIMIT 25;
+MATCH path = (a)-[r]->(b) RETURN path LIMIT 25;
+
+-- Check relationship types
+MATCH ()-[r]->() RETURN DISTINCT type(r) as relationship_types;
+```
+
+**Problem**: "Empty database after ingestion"
+```bash
+# Verify the backend is actually being used
+uv run python -m metazcode ingest --path data/ssis/dataWH_ssis \
+  --database memgraph --memgraph-username "" --memgraph-password ""
+
+# Check the logs for "Using Memgraph backend" message
+# If you see "Falling back to NetworkX", check your connection settings
+```
+
+### General Issues
+
+**Problem**: "ModuleNotFoundError" or import errors
+```bash
+# Reinstall dependencies
+uv sync
+
+# For Memgraph support
+uv sync --extra memgraph
+```
+
+**Problem**: "No .dtsx files found"
+```bash
+# Check your path structure
+ls -la /path/to/your/ssis/project/
+
+# Make sure you have .dtsx files in the directory
+find /path/to/your/ssis/project/ -name "*.dtsx"
+```
 
 ## ❓ FAQ
 
