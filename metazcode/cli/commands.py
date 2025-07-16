@@ -10,6 +10,58 @@ from metazcode.sdk.graph.graph_constructor import GraphClientBuilder
 from metazcode.cli.orchestrator import Orchestrator
 from metazcode.sdk.models.canonical_types import NodeType
 from metazcode.sdk.integration.index_integration import IndexIntegration
+from metazcode.sdk.models.config import DatabaseConfig, MetaZenseConfig
+
+
+def database_option(f):
+    """Decorator to add database configuration options to CLI commands."""
+    f = click.option(
+        "--database",
+        type=click.Choice(["networkx", "memgraph"]),
+        default=None,
+        help="Graph database backend to use (overrides environment variable)",
+    )(f)
+    f = click.option(
+        "--memgraph-host",
+        default=None,
+        help="Memgraph server host (default: localhost)",
+    )(f)
+    f = click.option(
+        "--memgraph-port",
+        type=int,
+        default=None,
+        help="Memgraph server port (default: 7687)",
+    )(f)
+    f = click.option(
+        "--memgraph-username",
+        default=None,
+        help="Memgraph username (default: from environment)",
+    )(f)
+    f = click.option(
+        "--memgraph-password",
+        default=None,
+        help="Memgraph password (default: from environment)",
+    )(f)
+    return f
+
+
+def get_database_config(database: Optional[str], memgraph_host: Optional[str], memgraph_port: Optional[int], memgraph_username: Optional[str], memgraph_password: Optional[str]) -> DatabaseConfig:
+    """Create database configuration from CLI options and environment."""
+    config = DatabaseConfig.from_environment()
+    
+    # Override with CLI options if provided
+    if database:
+        config.backend = database
+    if memgraph_host:
+        config.host = memgraph_host
+    if memgraph_port:
+        config.port = memgraph_port
+    if memgraph_username:
+        config.username = memgraph_username
+    if memgraph_password:
+        config.password = memgraph_password
+    
+    return config
 
 
 @click.group()
@@ -24,7 +76,8 @@ def cli():
     default=".",
     help="The path to the project directory or a specific file to ingest.",
 )
-def ingest(path: str):
+@database_option
+def ingest(path: str, database: Optional[str], memgraph_host: Optional[str], memgraph_port: Optional[int], memgraph_username: Optional[str], memgraph_password: Optional[str]):
     """
     Discovers and runs all available ingestion tools on the specified path.
     Can target a whole directory or a single supported file.
@@ -47,8 +100,14 @@ def ingest(path: str):
         )
         return
 
-    # 1. Build the graph client
-    graph_client = GraphClientBuilder.get_client()
+    # 1. Build the graph client with configuration
+    db_config = get_database_config(database, memgraph_host, memgraph_port, memgraph_username, memgraph_password)
+    
+    # Test connection and show status
+    if not GraphClientBuilder.validate_connection(db_config):
+        click.echo(f"Warning: Could not connect to {db_config.backend} backend. Falling back to NetworkX.", err=True)
+    
+    graph_client = GraphClientBuilder.get_client(db_config)
 
     # 2. Initialize and run the orchestrator
     orchestrator = Orchestrator(
@@ -68,7 +127,8 @@ def ingest(path: str):
 @click.option(
     "--output-path", default="graph.png", help="Path to save the visualization."
 )
-def visualize(path: str, output_path: str):
+@database_option
+def visualize(path: str, output_path: str, database: Optional[str], memgraph_host: Optional[str], memgraph_port: Optional[int], memgraph_username: Optional[str], memgraph_password: Optional[str]):
     """
     Generates a visual representation of the graph.
     NOTE: This is a basic visualization and may be unreadable for large graphs.
@@ -77,7 +137,14 @@ def visualize(path: str, output_path: str):
         f"Generating graph visualization for '{path}' and saving to '{output_path}'..."
     )
 
-    graph_client = GraphClientBuilder.get_client()
+    # Build the graph client with configuration
+    db_config = get_database_config(database, memgraph_host, memgraph_port, memgraph_username, memgraph_password)
+    
+    # Test connection and show status
+    if not GraphClientBuilder.validate_connection(db_config):
+        click.echo(f"Warning: Could not connect to {db_config.backend} backend. Falling back to NetworkX.", err=True)
+    
+    graph_client = GraphClientBuilder.get_client(db_config)
 
     p = Path(path)
     root_path: str
@@ -124,12 +191,21 @@ def visualize(path: str, output_path: str):
     type=click.Path(dir_okay=False, writable=True),
     help="Path to save the output JSON file.",
 )
-def dump(path: str, output: Optional[str]):
+@database_option
+def dump(path: str, output: Optional[str], database: Optional[str], memgraph_host: Optional[str], memgraph_port: Optional[int], memgraph_username: Optional[str], memgraph_password: Optional[str]):
     """
     Ingests the project and prints the nodes and edges to the console or saves to a JSON file.
     """
     click.echo("==================== Starting Ingestion ====================")
-    graph_client = GraphClientBuilder.get_client()
+    
+    # Build the graph client with configuration
+    db_config = get_database_config(database, memgraph_host, memgraph_port, memgraph_username, memgraph_password)
+    
+    # Test connection and show status
+    if not GraphClientBuilder.validate_connection(db_config):
+        click.echo(f"Warning: Could not connect to {db_config.backend} backend. Falling back to NetworkX.", err=True)
+    
+    graph_client = GraphClientBuilder.get_client(db_config)
 
     p = Path(path)
     root_path: str
@@ -210,7 +286,8 @@ def dump(path: str, output: Optional[str]):
     is_flag=True,
     help="Enable verbose logging to see detailed progress.",
 )
-def analyze(path: str, output: Optional[str], verbose: bool):
+@database_option
+def analyze(path: str, output: Optional[str], verbose: bool, database: Optional[str], memgraph_host: Optional[str], memgraph_port: Optional[int], memgraph_username: Optional[str], memgraph_password: Optional[str]):
     """
     Perform cross-package dependency analysis on an existing graph.
     
@@ -247,8 +324,14 @@ def analyze(path: str, output: Optional[str], verbose: bool):
         return
     
     try:
-        # 1. Build the graph client and load existing graph
-        graph_client = GraphClientBuilder.get_client()
+        # 1. Build the graph client with configuration
+        db_config = get_database_config(database, memgraph_host, memgraph_port, memgraph_username, memgraph_password)
+        
+        # Test connection and show status
+        if not GraphClientBuilder.validate_connection(db_config):
+            click.echo(f"Warning: Could not connect to {db_config.backend} backend. Falling back to NetworkX.", err=True)
+        
+        graph_client = GraphClientBuilder.get_client(db_config)
         
         # 2. Load the graph by running ingestion first
         click.echo("[INFO] Loading existing graph...")
@@ -344,7 +427,8 @@ def analyze(path: str, output: Optional[str], verbose: bool):
     default=None,
     help="Project identifier for the index (optional).",
 )
-def ingest_n_index(path: str, index_output: Optional[str], project_id: Optional[str]):
+@database_option
+def ingest_n_index(path: str, index_output: Optional[str], project_id: Optional[str], database: Optional[str], memgraph_host: Optional[str], memgraph_port: Optional[int], memgraph_username: Optional[str], memgraph_password: Optional[str]):
     """
     Run both ingestion and indexing together.
     
@@ -435,7 +519,8 @@ def ingest_n_index(path: str, index_output: Optional[str], project_id: Optional[
     is_flag=True,
     help="Enable verbose logging to see detailed progress.",
 )
-def full(path: str, output: Optional[str], index_output: Optional[str], project_id: Optional[str], verbose: bool):
+@database_option
+def full(path: str, output: Optional[str], index_output: Optional[str], project_id: Optional[str], verbose: bool, database: Optional[str], memgraph_host: Optional[str], memgraph_port: Optional[int], memgraph_username: Optional[str], memgraph_password: Optional[str]):
     """
     Complete SSIS analysis: ingest + analyze + index in one command.
     
@@ -479,7 +564,14 @@ def full(path: str, output: Optional[str], index_output: Optional[str], project_
         click.echo("Phase 1: SSIS Ingestion (Building Graph)")
         click.echo("-" * 50)
         
-        graph_client = GraphClientBuilder.get_client()
+        # Build the graph client with configuration
+        db_config = get_database_config(database, memgraph_host, memgraph_port, memgraph_username, memgraph_password)
+        
+        # Test connection and show status
+        if not GraphClientBuilder.validate_connection(db_config):
+            click.echo(f"Warning: Could not connect to {db_config.backend} backend. Falling back to NetworkX.", err=True)
+        
+        graph_client = GraphClientBuilder.get_client(db_config)
         orchestrator = Orchestrator(
             graph_client=graph_client, root_path=root_path, target_file=target_file
         )
@@ -628,7 +720,8 @@ def full(path: str, output: Optional[str], index_output: Optional[str], project_
 @click.option("--path", default=".", help="The path to the project directory.")
 @click.option("--output", default=None, help="Path to save analysis results.")
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose logging.")
-def complete(path: str, output: Optional[str], verbose: bool):
+@database_option
+def complete(path: str, output: Optional[str], verbose: bool, database: Optional[str], memgraph_host: Optional[str], memgraph_port: Optional[int], memgraph_username: Optional[str], memgraph_password: Optional[str]):
     """
     Alias for 'full' command - complete SSIS analysis in one shot.
     
@@ -639,7 +732,9 @@ def complete(path: str, output: Optional[str], verbose: bool):
     # Call the full command with default parameters
     from click import Context
     ctx = Context(full)
-    ctx.invoke(full, path=path, output=output, index_output=None, project_id=None, verbose=verbose)
+    ctx.invoke(full, path=path, output=output, index_output=None, project_id=None, verbose=verbose, 
+               database=database, memgraph_host=memgraph_host, memgraph_port=memgraph_port,
+               memgraph_username=memgraph_username, memgraph_password=memgraph_password)
 
 
 if __name__ == "__main__":

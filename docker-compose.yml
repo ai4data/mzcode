@@ -1,0 +1,26 @@
+services:
+  memgraph:
+    image: memgraph/memgraph-mage
+    container_name: metazensecode-memgraph
+    ports:
+      - "7687:7687"
+      - "7444:7444"
+    environment:
+      - MEMGRAPH_ALSO_LOG_TO_STDERR=true
+    command: ["--auth-module-executable", "", "--auth-password-strength-regex", ".*"]
+    volumes:
+      - memgraph-data:/var/lib/memgraph
+  
+  lab:
+    image: memgraph/lab
+    container_name: metazensecode-lab
+    ports:
+      - "3000:3000"
+    environment:
+      - MEMGRAPH_HOST=metazensecode-memgraph
+    depends_on:
+      - memgraph
+
+volumes:
+  memgraph-data:
+    driver: local

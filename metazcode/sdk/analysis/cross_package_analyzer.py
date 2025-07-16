@@ -30,7 +30,7 @@ class CrossPackageAnalyzer:
     
     def __init__(self, graph_client: GraphClientInterface):
         self.graph_client = graph_client
-        self.graph = graph_client.get_graph()
+        self.graph = self._get_networkx_graph()
         
     def analyze(self) -> Dict[str, Any]:
         """
@@ -97,7 +97,16 @@ class CrossPackageAnalyzer:
     def _get_all_packages(self) -> List[Dict[str, Any]]:
         """Get all pipeline (package) nodes from the graph."""
         packages = []
-        for node_id, node_data in self.graph.nodes(data=True):
+        
+        # For Memgraph, we need to handle the case where cross-package analysis is limited
+        raw_graph = self.graph_client.get_graph()
+        if not isinstance(raw_graph, nx.DiGraph):
+            # Limited support for Memgraph - return empty packages for now
+            logger.warning("Limited cross-package analysis support for Memgraph backend")
+            return packages
+        
+        # Use NetworkX approach for full support
+        for node_id, node_data in raw_graph.nodes(data=True):
             if node_data.get('node_type') == 'pipeline':
                 packages.append({
                     'id': node_id,
@@ -105,6 +114,18 @@ class CrossPackageAnalyzer:
                     'properties': node_data.get('properties', {})
                 })
         return packages
+    
+    def _get_networkx_graph(self) -> nx.DiGraph:
+        """Get a NetworkX graph representation from the graph client."""
+        # Check if it's already a NetworkX graph
+        raw_graph = self.graph_client.get_graph()
+        if isinstance(raw_graph, nx.DiGraph):
+            return raw_graph
+        
+        # If it's not a NetworkX graph (e.g., Memgraph), create a simple empty graph
+        # This is a temporary solution - full Memgraph support needs proper abstraction
+        logger.warning("Using Memgraph backend with limited cross-package analysis support")
+        return nx.DiGraph()
     
     def _analyze_shared_tables(self, packages: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
         """Identify tables that are used by multiple packages."""
