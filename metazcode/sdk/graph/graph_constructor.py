@@ -39,10 +39,10 @@ class GraphClientBuilder:
             return NetworkXGraphClient()
         
         elif config.backend == "memgraph":
-            logger.info("Using Memgraph backend for graph storage")
+            logger.info("Using analytics-ready Memgraph backend for graph storage")
             try:
-                from metazcode.sdk.graph.client_memgraph import MemgraphClient
-                return MemgraphClient(config)
+                from metazcode.sdk.graph.analytics_ready_client import AnalyticsReadyMemgraphClient
+                return AnalyticsReadyMemgraphClient(config)
             except ImportError as e:
                 logger.error(f"Memgraph dependencies not installed: {e}")
                 logger.info("Falling back to NetworkX backend")
@@ -74,8 +74,8 @@ class GraphClientBuilder:
             
         elif config.backend == "memgraph":
             try:
-                from metazcode.sdk.graph.client_memgraph import MemgraphClient
-                client = MemgraphClient(config)
+                from metazcode.sdk.graph.analytics_ready_client import AnalyticsReadyMemgraphClient
+                client = AnalyticsReadyMemgraphClient(config)
                 return client.test_connection()
             except Exception as e:
                 logger.error(f"Memgraph connection validation failed: {e}")

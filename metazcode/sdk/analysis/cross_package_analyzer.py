@@ -122,10 +122,39 @@ class CrossPackageAnalyzer:
         if isinstance(raw_graph, nx.DiGraph):
             return raw_graph
         
-        # If it's not a NetworkX graph (e.g., Memgraph), create a simple empty graph
-        # This is a temporary solution - full Memgraph support needs proper abstraction
-        logger.warning("Using Memgraph backend with limited cross-package analysis support")
-        return nx.DiGraph()
+        # For Memgraph, create NetworkX graph from stored data
+        logger.warning("Limited cross-package analysis support for Memgraph backend")
+        
+        # Create NetworkX graph from Memgraph data
+        graph = nx.DiGraph()
+        
+        try:
+            # Get all nodes
+            all_nodes = self.graph_client.get_all_nodes()
+            for node in all_nodes:
+                node_dict = node.to_dict()
+                graph.add_node(node_dict['node_id'], **node_dict)
+            
+            # Get all edges via Cypher query
+            connection = self.graph_client.get_graph()
+            cursor = connection.cursor()
+            cursor.execute("""
+                MATCH (source)-[r]->(target)
+                RETURN source.id as source_id, target.id as target_id, 
+                       type(r) as relation_type, properties(r) as properties
+            """)
+            edge_results = cursor.fetchall()
+            
+            for source_id, target_id, relation_type, properties in edge_results:
+                edge_attrs = properties.copy() if properties else {}
+                edge_attrs['relation'] = relation_type
+                graph.add_edge(source_id, target_id, **edge_attrs)
+                
+        except Exception as e:
+            logger.error(f"Failed to convert Memgraph data to NetworkX: {e}")
+            return nx.DiGraph()
+        
+        return graph
     
     def _analyze_shared_tables(self, packages: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
         """Identify tables that are used by multiple packages."""

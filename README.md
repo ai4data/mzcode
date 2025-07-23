@@ -1,520 +1,123 @@
 # MetaZenseCode
 
-**Transform your SSIS packages into intelligent, actionable business insights**
+**Transform your SSIS packages into intelligent business insights**
 
-MetaZenseCode extracts deep business logic from SQL Server Integration Services (SSIS) packages and creates comprehensive dependency graphs that power data-driven decisions across your organization. From migration planning to compliance automation, from cost optimization to business process discovery - MetaZenseCode turns your ETL code into strategic business intelligence.
-
-## ✨ What It Does
-
-- **📊 Extracts Business Logic** - Automatically parses .dtsx files and creates comprehensive metadata graphs
-- **🔍 Maps Dependencies** - Visualizes complex data flows and package relationships
-- **⚠️ Identifies Risks** - Spots bottlenecks, conflicts, and compliance issues
-- **📋 Enables Intelligence** - Powers migration, optimization, and business process insights
-- **🗄️ Dual Backend Support** - Choose between NetworkX (fast) or Memgraph (scalable) storage
+MetaZenseCode automatically analyzes your SSIS projects and creates comprehensive dependency maps that power migration planning, compliance reporting, and business process optimization.
 
 ## 🚀 Quick Start
 
-### Install
-
+### 1. Install
 ```bash
-# Get the code
 git clone <repository-url>
 cd metazensecode
-
-# Install with uv (fast Python package manager)
 uv sync
-
-# For Memgraph database support (optional, for large-scale analysis)
-uv sync --extra memgraph
 ```
 
-### Database Setup
-
-**Option 1: NetworkX (Default) - For small to medium projects**
+### 2. Run Analysis
 ```bash
-# No additional setup needed - uses in-memory NetworkX graphs
-```
-
-**Option 2: Memgraph Database - For large-scale enterprise analysis**
-
-1. **Start Memgraph Database**:
-```bash
-# Start Memgraph and Lab interface using Docker
-docker-compose up -d
-
-# This starts:
-# - Memgraph database on port 7687
-# - Memgraph Lab (web interface) on port 3000
-```
-
-2. **Configure Environment**:
-```bash
-# Copy and configure environment variables
-cp .env.example .env
-
-# Edit .env and set:
-# METAZCODE_DB_BACKEND=memgraph
-# MEMGRAPH_USERNAME=admin
-# MEMGRAPH_PASSWORD=admin
-```
-
-3. **Test Connection**:
-```bash
-# Test if Memgraph is running
-docker ps  # Should show memgraph containers
-
-# Access Memgraph Lab in browser
-open http://localhost:3000
-```
-
-### Run Analysis
-
-**Option 1: Everything in one command (recommended)**
-```bash
-# NetworkX backend (default)
-uv run python -m metazcode full --path "path/to/your/ssis/project"
-
-# Memgraph backend for large-scale analysis
-uv run python -m metazcode full --path "path/to/your/ssis/project" \
-  --database memgraph --memgraph-username admin --memgraph-password admin
-```
-
-**Option 2: Step by step**
-```bash
-# Step 1: Extract business logic
-uv run python -m metazcode ingest --path "path/to/your/ssis/project" --database memgraph
-
-# Step 2: Find dependencies
-uv run python -m metazcode analyze --path "path/to/your/ssis/project" --database memgraph
-```
-
-**Option 3: Using environment variables**
-```bash
-# Set environment variables
-export METAZCODE_DB_BACKEND=memgraph
-export MEMGRAPH_USERNAME=admin
-export MEMGRAPH_PASSWORD=admin
-
-# Run analysis
+# Analyze your SSIS project (that's it!)
 uv run python -m metazcode full --path "path/to/your/ssis/project"
 ```
 
-### Try the Example
+### 3. See Results
+Your analysis creates a comprehensive report showing:
+- 📊 All SSIS packages and their operations
+- 🔗 Dependencies between packages
+- ⚠️ Potential risks and bottlenecks
+- 📋 Execution order recommendations
 
-```bash
-# Test with included sample data (NetworkX)
-uv run python -m metazcode full --path data/ssis/dataWH_ssis
+## ✨ What You Get
 
-# Test with Memgraph backend
-uv run python -m metazcode full --path data/ssis/dataWH_ssis \
-  --database memgraph --memgraph-username admin --memgraph-password admin
-```
-
-### Verify Data in Memgraph
-
-After running analysis with Memgraph, you can verify the data was stored:
-
-1. **Check via Memgraph Lab**:
-   - Open http://localhost:3000
-   - Connect to: `localhost:7687` (username: `""`, password: `""`)
-
-2. **Essential Verification Queries**:
-
-```cypher
--- Quick Overview
-MATCH (n) RETURN count(n) as node_count;
-MATCH ()-[r]->() RETURN count(r) as relationship_count;
-
--- View Node Types
-MATCH (n) RETURN n.node_type, count(n) as count ORDER BY count DESC;
-
--- View Relationship Types
-MATCH ()-[r]->() RETURN type(r), count(r) as count ORDER BY count DESC;
-```
-
-3. **Explore SSIS Structure**:
-
-```cypher
--- View All SSIS Packages
-MATCH (p) WHERE p.node_type = 'pipeline' RETURN p.name, p.id;
-
--- View Package Dependencies
-MATCH (p1:pipeline)-[r:CONTAINS]->(op)-[r2]->(p2:pipeline) 
-RETURN p1.name, type(r2), p2.name;
-
--- See Data Flow (Operations → Tables)
-MATCH (op)-[r:WRITES_TO|READS_FROM]->(table) 
-WHERE op.node_type = 'operation' AND table.node_type = 'table'
-RETURN op.name, type(r), table.name;
-```
-
-4. **Advanced Analysis Queries**:
-
-```cypher
--- Find All Tables and Their Usage
-MATCH (table) 
-WHERE table.node_type = 'table' 
-OPTIONAL MATCH (op)-[r]->(table)
-RETURN table.name, 
-       collect(DISTINCT type(r)) as usage_types,
-       count(op) as operation_count
-ORDER BY operation_count DESC;
-
--- Visualize Complete Data Lineage
-MATCH path = (pipeline)-[r1:CONTAINS]->(operation)-[r2:WRITES_TO|READS_FROM]->(table)
-RETURN path LIMIT 25;
-
--- Find Complex Operations (with detailed metadata)
-MATCH (op) 
-WHERE op.node_type = 'operation' 
-AND op.properties CONTAINS 'column_lineage'
-RETURN op.name, op.properties LIMIT 5;
-```
-
-5. **Troubleshooting Queries**:
-
-```cypher
--- Check if relationships are properly labeled
-MATCH ()-[r]->() 
-RETURN DISTINCT type(r) as relationship_types;
-
--- Find nodes without relationships
-MATCH (n) 
-WHERE NOT (n)-[]-() 
-RETURN n.node_type, count(n) as isolated_count;
-
--- View sample of everything
-MATCH (a)-[r]->(b) 
-RETURN a.name, type(r), b.name, 
-       a.node_type, b.node_type 
-LIMIT 10;
-```
-
-6. **Check via Command Line**:
-```bash
-# Quick verification script
-uv run python -c "
-from metazcode.sdk.models.config import DatabaseConfig
-from metazcode.sdk.graph.client_memgraph import MemgraphClient
-
-config = DatabaseConfig(backend='memgraph', host='localhost', port=7687, username='', password='')
-client = MemgraphClient(config)
-print(f'Nodes: {client.get_node_count()}')
-print(f'Edges: {client.get_edge_count()}')
-client.close()
-"
-```
-
-**Expected Results After Ingestion**:
-- **Nodes**: 10+ (pipelines, operations, tables)
-- **Relationships**: 8+ (CONTAINS, WRITES_TO, READS_FROM, PRECEDES)
-- **Relationship Types**: CONTAINS, WRITES_TO, READS_FROM, PRECEDES
-
-### Quick Reference - Most Useful Queries
-
-```cypher
--- 🔍 QUICK OVERVIEW
-MATCH (n) RETURN count(n) as nodes;
-MATCH ()-[r]->() RETURN count(r) as relationships;
-
--- 📊 VISUALIZE YOUR DATA
-MATCH path = (a)-[r]->(b) RETURN path LIMIT 25;
-
--- 📋 LIST ALL PACKAGES
-MATCH (p) WHERE p.node_type = 'pipeline' RETURN p.name;
-
--- 🔗 SEE DATA FLOW
-MATCH (op)-[r:WRITES_TO|READS_FROM]->(table) 
-RETURN op.name, type(r), table.name;
-
--- ⚡ FIND BOTTLENECKS
-MATCH (table) WHERE table.node_type = 'table' 
-OPTIONAL MATCH (op)-[r]->(table)
-RETURN table.name, count(op) as usage_count
-ORDER BY usage_count DESC;
-```
-
-## 📊 What You Get
-
-### Beautiful Progress Report
+### Beautiful Analysis Report
 ```
 🚀 Starting Complete SSIS Analysis
 📁 Project path: /your/ssis/project
 
-📊 Phase 1: Reading SSIS packages...
-✅ Found 10 packages, extracted 48 operations
-
-🕸️ Phase 2: Finding dependencies...
+✅ Found 15 packages, extracted 67 operations
 ✅ Discovered 8 cross-package dependencies
+✅ Identified 3 shared resources
+
 📋 Execution Order:
    Level 1: CustomerETL, ProductETL (can run in parallel)
    Level 2: SalesETL (waits for Level 1)
    Level 3: ReportingETL (waits for Level 2)
 
-⚠️ High-Risk Resources:
-   🔌 MainDB_Connection: used by 4 packages (bottleneck!)
+⚠️  Potential Issues:
+   🔌 MainDB_Connection: used by 4 packages (potential bottleneck)
 
 🎉 Analysis Complete!
 💾 Results saved to: enhanced_graph_full_analysis.json
 ```
 
-### Rich Metadata Files
-- **Enhanced graph** - Complete business logic and dependencies
-- **Analysis report** - Execution order and risk assessment
-- **Search index** - Fast search through your SSIS metadata
+### Rich Output Files
+- **enhanced_graph_full_analysis.json** - Complete analysis with all metadata
+- **Terminal report** - Immediate insights and recommendations
 
-## 🎯 Transformative Use Cases
+## 🎯 Perfect For
 
-### 🔄 **Platform Migration & Modernization**
-- **SSIS to Cloud**: Accelerate migration to Azure Data Factory, AWS Glue, or Google Dataflow
-- **Legacy Modernization**: Transform monolithic ETL to microservices architecture
-- **Platform Independence**: Abstract business logic for vendor-agnostic implementations
+- **🔄 SSIS Migration Planning** - Map your current state before moving to cloud
+- **📊 Impact Analysis** - Understand what changes when you modify a package
+- **🚨 Risk Assessment** - Identify bottlenecks and failure points
+- **📋 Documentation** - Auto-generate comprehensive SSIS documentation
+- **🛡️ Compliance** - Track data flows for audit and regulatory requirements
 
-### 🚨 **Risk Management & Compliance**
-- **Data Breach Response**: Instantly map impact of compromised data sources
-- **Regulatory Compliance**: Automated GDPR, SOX, HIPAA audit trail generation
-- **Change Impact Analysis**: Predict downstream effects before making changes
+## 🗄️ Storage Options
 
-### 💰 **Cost Optimization & Performance**
-- **Resource Allocation**: Identify expensive, low-value data processing
-- **Bottleneck Detection**: Find performance constraints in ETL pipelines
-- **Cloud Cost Management**: Optimize resource usage and reduce operational costs
-
-### 🔍 **Business Intelligence & Discovery**
-- **Process Mining**: Reverse-engineer business processes from data flows
-- **Data Lineage**: Understand complete data journey from source to report
-- **Business Impact Analysis**: Connect technical components to business outcomes
-
-### 🛡️ **Quality & Governance**
-- **Data Quality Root Cause**: Trace quality issues back to their source
-- **Governance Automation**: Self-maintaining data catalogs and documentation
-- **Testing Strategy**: Auto-generate test cases from ETL metadata
-
-### 🤖 **AI & Machine Learning Enhancement**
-- **Predictive Analytics**: Forecast ETL failures and business disruptions
-- **Anomaly Detection**: Identify unusual patterns in data flows
-- **Intelligent Recommendations**: AI-powered optimization suggestions
-
-## 🗄️ Database Backends
-
-MetaZenseCode supports dual backend architecture for maximum flexibility:
-
-### NetworkX (Default)
-- **Best for**: Small to medium SSIS projects (< 50 packages), prototyping, algorithm-heavy analysis
-- **Pros**: Fast startup, no setup required, rich graph algorithms (400+), excellent for development
-- **Cons**: In-memory only, limited scalability, no persistence
-
-### Memgraph Database
-- **Best for**: Large enterprise SSIS environments (50+ packages), production deployments, persistent storage
-- **Pros**: Persistent storage, concurrent access, scalable, real-time querying, web-based interface
-- **Cons**: Requires Docker setup, network overhead for small operations
-
-### Seamless Backend Switching
-
+### Option 1: Quick Analysis (Default)
 ```bash
-# NetworkX backend (default)
-uv run python -m metazcode full --path "your/ssis/project"
-
-# Memgraph backend via CLI flags
-uv run python -m metazcode full --database memgraph \
-  --memgraph-username admin --memgraph-password admin \
-  --path "your/ssis/project"
-
-# Memgraph backend via environment variables
-export METAZCODE_DB_BACKEND=memgraph
-export MEMGRAPH_USERNAME=admin
-export MEMGRAPH_PASSWORD=admin
+# Fast in-memory analysis - perfect for most users
 uv run python -m metazcode full --path "your/ssis/project"
 ```
+**Best for:** Small to medium projects, one-time analysis, development
 
-### Backend Selection Guide
-
-| Use Case | NetworkX | Memgraph | Reason |
-|----------|----------|----------|---------|
-| **Development & Prototyping** | ✅ | ❌ | Fast iteration, no setup |
-| **Algorithm-heavy Analysis** | ✅ | ❌ | Rich algorithm library |
-| **Production Deployment** | ❌ | ✅ | Persistence, reliability |
-| **Large Enterprise (>100K nodes)** | ❌ | ✅ | Scalability, performance |
-| **Multi-user Environment** | ❌ | ✅ | Concurrent access |
-| **Real-time Querying** | ❌ | ✅ | Live data exploration |
-
-## 📁 Commands & Database Options
-
-### Core Commands
-
-| Command | What It Does | When To Use |
-|---------|-------------|-------------|
-| `full` | **Everything** - Complete analysis | **First time users** |
-| `complete` | Same as `full` (shorter name) | **Quick analysis** |
-| `ingest` | Extract business logic only | **Basic parsing** |
-| `analyze` | Add dependency analysis | **After ingest** |
-| `dump` | Export results to JSON | **Save results** |
-
-### Database Backend Options
-
-All commands support these database options:
-
-| Flag | Description | Example |
-|------|-------------|---------|
-| `--database` | Backend choice (networkx/memgraph) | `--database memgraph` |
-| `--memgraph-host` | Memgraph server host | `--memgraph-host localhost` |
-| `--memgraph-port` | Memgraph server port | `--memgraph-port 7687` |
-| `--memgraph-username` | Memgraph username | `--memgraph-username admin` |
-| `--memgraph-password` | Memgraph password | `--memgraph-password admin` |
-
-### Command Examples
-
+### Option 2: Enterprise Database Storage
 ```bash
-# Basic analysis with NetworkX
-uv run python -m metazcode full --path "your/ssis/project"
-
-# Enterprise analysis with Memgraph
-uv run python -m metazcode full --path "your/ssis/project" \
-  --database memgraph --memgraph-username admin --memgraph-password admin
-
-# Step-by-step with different backends
-uv run python -m metazcode ingest --path "your/ssis/project" --database networkx
-uv run python -m metazcode analyze --path "your/ssis/project" --database memgraph
-```
-
-## 💡 Real-World Examples
-
-### Enterprise Migration Planning
-```bash
-# Analyze entire SSIS environment with Memgraph for persistence
-uv run python -m metazcode full --path "C:\SSIS\Projects" \
-  --database memgraph --memgraph-username admin --memgraph-password admin \
-  --output "migration_plan.json"
-
-# Results show:
-# - 150+ packages analyzed across 12 projects
-# - 45 shared databases and connections identified
-# - 8-level execution pipeline with parallel opportunities
-# - 15 high-risk bottlenecks requiring immediate attention
-```
-
-### Compliance Audit Preparation
-```bash
-# Generate comprehensive audit trail for compliance
-uv run python -m metazcode full --path "Production_ETL" \
-  --database memgraph --output "compliance_audit.json"
-
-# Use Memgraph Lab to query specific compliance questions:
-# - Which packages handle PII data?
-# - What's the complete lineage of customer data?
-# - Are there any unencrypted data flows?
-```
-
-### Cost Optimization Analysis
-```bash
-# Identify expensive, low-value processing
-uv run python -m metazcode analyze --path "CloudETL_Environment" \
-  --database memgraph --verbose
-
-# Then query Memgraph for optimization insights:
-# - Which transformations consume the most resources?
-# - What data flows can be consolidated?
-# - Are there duplicate processing patterns?
-```
-
-### Business Process Discovery
-```bash
-# Reverse-engineer business processes from ETL flows
-uv run python -m metazcode full --path "BusinessETL" \
-  --database memgraph --project-id "OrderToCash"
-
-# Explore in Memgraph Lab:
-# - Map the complete Order-to-Cash process
-# - Identify process bottlenecks and delays
-# - Understand data dependencies across business units
-```
-
-### Quick Development Check
-```bash
-# Fast analysis for development (NetworkX)
-uv run python -m metazcode complete --path "MyETL_Project"
-
-# Perfect for:
-# - Quick dependency checking
-# - Development validation
-# - Local testing
-```
-
-## 🔧 Options
-
-### Basic Options
-- `--path` - Your SSIS project folder
-- `--output` - Save detailed analysis to file
-- `--verbose` - See detailed progress
-
-### Advanced Options  
-- `--index-output` - Save search index
-- `--project-id` - Custom project name
-
-## 🔧 Troubleshooting
-
-### Memgraph Connection Issues
-
-**Problem**: "Connection refused" or "Authentication failure"
-```bash
-# Check if Memgraph is running
-docker ps | grep memgraph
-
-# Start Memgraph if not running
+# Start database
 docker-compose up -d
 
-# Test connection
-uv run python -c "
-from metazcode.sdk.models.config import DatabaseConfig
-from metazcode.sdk.graph.client_memgraph import MemgraphClient
-try:
-    config = DatabaseConfig(backend='memgraph', host='localhost', port=7687, username='', password='')
-    client = MemgraphClient(config)
-    print('✓ Memgraph connection successful')
-    client.close()
-except Exception as e:
-    print(f'✗ Connection failed: {e}')
-"
+# Run analysis with persistent storage
+METAZCODE_DB_BACKEND=memgraph uv run python -m metazcode full --path "your/ssis/project"
 ```
+**Best for:** Large enterprises, production use, multiple tools accessing the same data
 
-**Problem**: "Can see nodes but not relationships in Memgraph Lab"
-```cypher
--- Try these queries in Memgraph Lab:
-MATCH (a)-[r]->(b) RETURN a, r, b LIMIT 25;
-MATCH path = (a)-[r]->(b) RETURN path LIMIT 25;
+**💡 When to use database storage:**
+- You have 50+ SSIS packages
+- Multiple people need to access the analysis
+- You're building migration tools that need the data
+- You want to query the results over time
 
--- Check relationship types
-MATCH ()-[r]->() RETURN DISTINCT type(r) as relationship_types;
-```
+## 📁 Try It Out
 
-**Problem**: "Empty database after ingestion"
+### Test with Sample Data
 ```bash
-# Verify the backend is actually being used
-uv run python -m metazcode ingest --path data/ssis/dataWH_ssis \
-  --database memgraph --memgraph-username "" --memgraph-password ""
+# Quick test with included sample
+uv run python -m metazcode full --path data/ssis/dataWH_ssis
 
-# Check the logs for "Using Memgraph backend" message
-# If you see "Falling back to NetworkX", check your connection settings
+# Check the results
+cat enhanced_graph_full_analysis.json
 ```
 
-### General Issues
-
-**Problem**: "ModuleNotFoundError" or import errors
+### Analyze Your Own SSIS Project
 ```bash
-# Reinstall dependencies
-uv sync
+# Point to your SSIS project folder
+uv run python -m metazcode full --path "C:\YourSSISProjects\MyProject"
 
-# For Memgraph support
-uv sync --extra memgraph
+# Or just a single package
+uv run python -m metazcode full --path "C:\MyPackage.dtsx"
 ```
 
-**Problem**: "No .dtsx files found"
-```bash
-# Check your path structure
-ls -la /path/to/your/ssis/project/
+## 🔧 Advanced Options
 
-# Make sure you have .dtsx files in the directory
-find /path/to/your/ssis/project/ -name "*.dtsx"
+```bash
+# Save analysis to custom file
+uv run python -m metazcode full --path "your/project" --output "my_analysis.json"
+
+# See detailed progress
+uv run python -m metazcode full --path "your/project" --verbose
+
+# Use database storage with custom connection
+uv run python -m metazcode full --path "your/project" \
+  --database memgraph --memgraph-host localhost --memgraph-port 7687
 ```
 
 ## ❓ FAQ
@@ -526,66 +129,48 @@ A: .dtsx packages, .conmgr connections, .params parameters, .dtproj projects
 A: No! It only reads and analyzes - never changes your files
 
 **Q: How long does analysis take?**  
-A: Typically under 30 seconds for most projects (tested on 50+ package environments)
+A: Usually under 30 seconds for most projects
 
-**Q: What if I have connection errors?**  
-A: The tool works offline - it analyzes file structure, not live connections
+**Q: What if I have connection errors in my packages?**  
+A: No problem! The tool analyzes file structure, not live connections
 
-## 🚀 Ready to Start?
+**Q: Can I use this for other ETL tools?**  
+A: Currently SSIS only, but the architecture supports other platforms
 
-### Quick Start (NetworkX)
+## 🚨 Troubleshooting
+
+**Problem: "No .dtsx files found"**
 ```bash
-# Install and test with NetworkX backend
-git clone <repository-url>
-cd metazensecode  
-uv sync
-
-# Analyze your SSIS project
-uv run python -m metazcode full --path "your/ssis/project"
-
-# Check the results!
-# - enhanced_graph_full_analysis.json (complete metadata)
-# - Your terminal shows execution plan and risks
+# Check your path has SSIS files
+ls /path/to/your/ssis/project/*.dtsx
 ```
 
-### Enterprise Setup (Memgraph)
+**Problem: "Connection refused" (when using database)**
 ```bash
-# Install with Memgraph support
-git clone <repository-url>
-cd metazensecode  
-uv sync --extra memgraph
-
-# Start Memgraph database
+# Make sure database is running
 docker-compose up -d
-
-# Configure environment
-cp .env.example .env
-# Edit .env: set METAZCODE_DB_BACKEND=memgraph, MEMGRAPH_USERNAME=admin, MEMGRAPH_PASSWORD=admin
-
-# Run enterprise analysis
-uv run python -m metazcode full --path "your/ssis/project" --database memgraph
-
-# Explore results in Memgraph Lab
-open http://localhost:3000
+docker ps | grep memgraph
 ```
 
-### Next Steps
+**Problem: "Import errors"**
+```bash
+# Reinstall dependencies
+uv sync
+```
 
-1. **Explore the Documentation**: Check out `docs/` for detailed use cases and backend comparisons
-2. **Try Different Backends**: Compare NetworkX vs Memgraph for your use case
-3. **Integrate with Your Workflow**: Use the JSON output for migration planning, compliance, or optimization
-4. **Scale Up**: Use Memgraph for production environments with large SSIS deployments
+## 🎉 What's Next?
 
-**Transform your SSIS environment from mystery to mastery!** 🎯
+After running your analysis:
 
----
-
-## 📚 Documentation
-
-- **[Backend Comparison](docs/backend-comparison.md)** - Detailed comparison of NetworkX vs Memgraph
-- **[Concrete Use Cases](docs/concrete-use-cases.md)** - Real-world applications and business value
-- **[CLAUDE.md](CLAUDE.md)** - Developer guide and architecture overview
+1. **Review the JSON output** - Contains complete metadata about your SSIS environment
+2. **Check execution order** - Use for migration planning and optimization  
+3. **Identify risks** - Address bottlenecks before they cause problems
+4. **Share insights** - Use for team discussions and documentation
 
 ## 🤝 Contributing
 
-MetaZenseCode is designed for extensibility. Whether you're adding new ETL platform support, enhancing analysis capabilities, or integrating with other tools, we welcome contributions that help organizations better understand and optimize their data infrastructure.
+MetaZenseCode is designed for extensibility. We welcome contributions that help organizations better understand and optimize their data infrastructure.
+
+---
+
+**Transform your SSIS environment from mystery to mastery!** 🎯
