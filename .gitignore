@@ -1,72 +1,75 @@
+
 # Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
+  __pycache__/
+  *.py[cod]
+  *$py.class
+  *.so
+  .Python
+  *.egg-info/
+  dist/
+  build/
 
 # Virtual environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# Testing
-.tox/
-.nox/
-.coverage
-.pytest_cache/
-cover/
-*.cover
-*.py,cover
-.hypothesis/
+  venv/
+  env/
+  ENV/
+  .venv/
 
 # IDE
-.vscode/
-.idea/
-*.swp
-*.swo
+  .vscode/
+  .idea/
+  *.swp
+  *.swo
 
-# OS
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
+# Test and analysis scripts (not needed for runtime)
+  test_*.py
+  validate_*.py
+  verify_*.py
+  analyze_*.py
+  debug_*.py
+  check_*.py
+  find_*.py
+  investigate_*.py
+  demo_*.py
+  *_test.py
+  *_analysis.py
+  *_parser_*.py
+  simple_*.py
+  super_*.py
+  production_*.py
+  final_*.py
+  create_*.py
+  query_*.py
+  migration_*.py
 
-# Project specific
-*.json
-*.log
-*.xml
-graph_*.json
-analysis_*.json
-output/
-results/
-cache/
+# Generated output files
+  *.json
+  !package.json
+  !pyproject.toml
 
-# Keep example files
-!examples/**/*.json
-!examples/**/*.xml
-!examples/**/*.dtsx
+# Analysis and documentation files not needed for runtime
+  comprehensive_*.md
+  bug-report.md
+  analysis_*.md
+
+  # Data files (example data should not be in main repo)
+  data/
+
+# Archive and temporary files
+  archive/
+  img/
+  output/
+  *.log
+  *.tmp
+  .DS_Store
+
+# Docker volumes
+  memgraph-data/
+
+# Environment files (keep example only)
+  .env
+  !.env.example
+
+# Lock files (optional - you might want to keep these)
+# uv.lock
+# package-lock.json
