@@ -1,7 +1,7 @@
 services:
   memgraph:
     image: memgraph/memgraph-mage
-    container_name: metazensecode-memgraph
+    container_name: mzcode-memgraph
     ports:
       - "7687:7687"
       - "7444:7444"
@@ -13,11 +13,11 @@ services:
   
   lab:
     image: memgraph/lab
-    container_name: metazensecode-lab
+    container_name: mzcode-lab
     ports:
       - "3000:3000"
     environment:
-      - MEMGRAPH_HOST=metazensecode-memgraph
+      - MEMGRAPH_HOST=mzcode-memgraph
     depends_on:
       - memgraph
 

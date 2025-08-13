@@ -7,6 +7,7 @@ downstream application consumption including migration, compliance, and governan
 
 import logging
 import json
+from datetime import datetime
 from typing import Dict, List, Any, Optional
 from .client_memgraph import MemgraphClient
 from ..models.config import DatabaseConfig
@@ -331,7 +332,7 @@ class AnalyticsReadyMemgraphClient(MemgraphClient):
         summary = [{
             'metric_name': 'graph_summary',
             'statistics': stats,
-            'calculated_at': 'timestamp()',
+            'calculated_at': datetime.now().isoformat(),
             'version': '1.0'
         }]
         
@@ -375,7 +376,7 @@ class AnalyticsReadyMemgraphClient(MemgraphClient):
         # Package the view data in the properties field
         properties = {
             "data": json.dumps(view_data),
-            "created_at": "timestamp()",
+            "created_at": datetime.now().isoformat(),
             "record_count": len(view_data),
             "version": "1.0",
             "view_type": "analytics_ready"
@@ -401,11 +402,12 @@ class AnalyticsReadyMemgraphClient(MemgraphClient):
         # Count by node types
         type_counts = {}
         for node_type in ['pipeline', 'operation', 'table', 'connection', 'parameter', 'variable']:
-            query = f"MATCH (n:Node {{node_type: '{node_type}'}}) RETURN count(n)"
+            query = f"MATCH (n:Node) WHERE n.node_type = '{node_type}' RETURN count(n)"
             try:
                 result = self._execute_query(query)
                 type_counts[node_type] = result[0][0] if result else 0
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Failed to count nodes of type '{node_type}': {e}")
                 type_counts[node_type] = 0
         
         # Store comprehensive metadata as a proper Node
@@ -432,7 +434,7 @@ class AnalyticsReadyMemgraphClient(MemgraphClient):
             "total_nodes": node_count,
             "total_edges": edge_count,
             "node_type_counts": type_counts,
-            "analysis_timestamp": "timestamp()",
+            "analysis_timestamp": datetime.now().isoformat(),
             "metazcode_version": "1.0",
             "ready_for_applications": True,
             "optimization_level": "analytics_ready",

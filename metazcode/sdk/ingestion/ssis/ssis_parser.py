@@ -7,7 +7,9 @@ import json
 
 from ...models.canonical_types import NodeType, EdgeType
 from ...models.graph import Node, Edge
+from ...models.traceability import SourceContext
 from .type_mapping import SSISDataTypeMapper, TargetPlatform
+from .sql_semantics import EnhancedSqlParser, SqlSemantics, create_join_edges_from_semantics
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +41,10 @@ class CanonicalSsisParser:
         self.enable_type_mapping = enable_type_mapping
         self.type_mapper = SSISDataTypeMapper() if enable_type_mapping else None
         self.target_platforms = self._parse_target_platforms(target_platforms or ["sql_server", "postgresql"])
+        
+        # Initialize enhanced SQL parser for migration support
+        self.sql_parser = EnhancedSqlParser()
+        self._pending_sql_semantics = None
 
     def _categorize_operation_subtype(self, native_type: str) -> str:
         """
@@ -133,12 +139,22 @@ class CanonicalSsisParser:
         )
 
         pipeline_id = f"pipeline:{package_name}"
+        # Create enhanced properties with traceability
+        pipeline_properties = {
+            "technology": "SSIS",
+            **SourceContext.create_node_traceability(
+                source_file_path=file_path,
+                source_file_type="dtsx",
+                xml_path="//DTS:Executable[@DTS:ExecutableType='Package']"
+            )
+        }
+        
         nodes.append(
             Node(
                 node_id=pipeline_id,
                 node_type=NodeType.PIPELINE,
                 name=package_name,
-                properties={"file_path": file_path, "technology": "SSIS"},
+                properties=pipeline_properties,
             )
         )
 
@@ -160,21 +176,41 @@ class CanonicalSsisParser:
             # Get operation subtype
             operation_subtype = self._categorize_operation_subtype(task_type)
 
+            # Create operation node with enhanced traceability
+            operation_properties = {
+                "native_type": task_type,
+                "operation_subtype": operation_subtype,
+                "technology": "SSIS",
+                **SourceContext.create_node_traceability(
+                    source_file_path=file_path,
+                    source_file_type="dtsx",
+                    xml_path=f"//DTS:Executable[@DTS:ObjectName='{task_name}']",
+                    parent_package=package_name
+                )
+            }
+            
             nodes.append(
                 Node(
                     node_id=task_id,
                     node_type=NodeType.OPERATION,
                     name=task_name,
-                    properties={
-                        "native_type": task_type,
-                        "operation_subtype": operation_subtype,
-                        "technology": "SSIS",
-                    },
+                    properties=operation_properties,
                 )
             )
             edges.append(
                 Edge(
-                    source_id=pipeline_id, target_id=task_id, relation=EdgeType.CONTAINS
+                    source_id=pipeline_id, 
+                    target_id=task_id, 
+                    relation=EdgeType.CONTAINS,
+                    properties=SourceContext.create_edge_traceability(
+                        source_file_path=file_path,
+                        derivation_method="xml_metadata",
+                        xml_location=f"//DTS:Executable[@DTS:ObjectName='{task_name}']",
+                        context_info=SourceContext.create_xml_derivation_context(
+                            xml_element_name="DTS:Executable",
+                            xml_attribute="DTS:ObjectName"
+                        )
+                    )
                 )
             )
 
@@ -203,7 +239,19 @@ class CanonicalSsisParser:
                         edges,
                         connection_id_map,
                         param_var_id_map,
+                        file_path,
                     )
+                    
+                    # Apply pending SQL semantics if they were collected during component parsing
+                    if (self._pending_sql_semantics and 
+                        self._pending_sql_semantics.get("task_id") == task_id):
+                        # Find the operation node and add SQL semantics
+                        operation_node = next((n for n in nodes if n.node_id == task_id), None)
+                        if operation_node:
+                            operation_node.properties["sql_semantics"] = json.dumps(
+                                self._pending_sql_semantics["sql_semantics"]
+                            )
+                            self._pending_sql_semantics = None  # Clear pending semantics
 
             elif "SqlTaskData" in task_type:
                 self._parse_execute_sql_task(
@@ -252,11 +300,15 @@ class CanonicalSsisParser:
 
             conn_id = f"connection:{conn_name}"
 
-            # Start with basic properties
+            # Start with basic properties including enhanced traceability
             properties = {
-                "file_path": file_path,
                 "technology": "SSIS",
                 "guid": conn_guid,
+                **SourceContext.create_node_traceability(
+                    source_file_path=file_path,
+                    source_file_type="dtsx",
+                    xml_path=f"//DTS:ConnectionManager[@DTS:ObjectName='{conn_name}']"
+                )
             }
 
             # Enrich with detailed properties from .conmgr files
@@ -345,6 +397,7 @@ class CanonicalSsisParser:
         edges: List[Edge],
         connection_id_map: Dict[str, str],
         param_var_id_map: Dict[str, str],
+        file_path: str,
     ):
         class_id = component_xml.get("componentClassID", "")
         component_name = component_xml.get("name", "")
@@ -369,7 +422,7 @@ class CanonicalSsisParser:
             )
         elif "Microsoft.OLEDBCommand" in class_id:
             self._parse_oledb_command_component(
-                component_xml, task_id, nodes, edges, connection_id_map, param_var_id_map
+                component_xml, task_id, nodes, edges, connection_id_map, param_var_id_map, file_path
             )
         elif "OLEDBSource" in class_id or "OLEDBDestination" in class_id:
             self._parse_oledb_component(
@@ -379,6 +432,7 @@ class CanonicalSsisParser:
                 edges,
                 connection_id_map,
                 param_var_id_map,
+                file_path,
             )
         # More transformation types will be added in subsequent phases
         else:
@@ -678,6 +732,7 @@ class CanonicalSsisParser:
         edges: List[Edge],
         connection_id_map: Dict[str, str],
         param_var_id_map: Dict[str, str],
+        file_path: str,
     ):
         """
         Parse OLE DB Source and Destination components (extracted from original method).
@@ -705,6 +760,16 @@ class CanonicalSsisParser:
                     source_id=task_id,
                     target_id=connection_id_map[conn_guid],
                     relation=EdgeType.USES_CONNECTION,
+                    properties=SourceContext.create_edge_traceability(
+                        source_file_path=file_path,
+                        derivation_method="xml_metadata",
+                        xml_location="//connections/connection[@connectionManagerID]",
+                        context_info=SourceContext.create_xml_derivation_context(
+                            xml_element_name="connection",
+                            xml_attribute="connectionManagerID"
+                        ),
+                        confidence_level="high"
+                    )
                 )
             )
 
@@ -719,23 +784,120 @@ class CanonicalSsisParser:
                     param_mapping_prop.text, task_id, edges, param_var_id_map
                 )
 
-        # Parse table information
+        # Parse table information and SQL semantics
         table_name = None
+        sql_tables_processed = False
+        sql_semantics = None
+        
         if properties_tag is not None:
-            prop_names_to_check = ["OpenRowset", "SqlCommand", "TableName"]
-            for prop_name in prop_names_to_check:
-                prop = properties_tag.find(f"property[@name='{prop_name}']")
-                if prop is not None and prop.text:
-                    if "SELECT" in prop.text.upper():
-                        found_tables = re.findall(
-                            r"(?:FROM|JOIN)\s+\[?(\w+)\]?\.\[?(\w+)\]?",
-                            prop.text,
-                            re.IGNORECASE,
-                        )
-                        if found_tables:
-                            table_name = f"{found_tables[0][0]}.{found_tables[0][1]}"
-                            break
-                    else:
+            # First, check for SQL commands and process ALL tables from them
+            sql_command_prop = properties_tag.find("property[@name='SqlCommand']")
+            if sql_command_prop is not None and sql_command_prop.text and "SELECT" in sql_command_prop.text.upper():
+                # Parse complete SQL semantics for migration support
+                sql_semantics = self.sql_parser.parse_sql_semantics(sql_command_prop.text)
+                
+                # Use tables from SQL semantics instead of old regex method
+                if sql_semantics and sql_semantics.tables:
+                    # Create table nodes for ALL tables found in SQL semantics
+                    for table_ref in sql_semantics.tables:
+                        sql_table_name = table_ref.name
+                        table_name_clean = sql_table_name.strip("[]")
+                        table_id = f"table:{table_name_clean}"
+                        
+                        # Create table node if it doesn't exist
+                        if not any(n.node_id == table_id for n in nodes):
+                            table_properties = {
+                                "technology": "SSIS",
+                                "table_name": table_name_clean,
+                                **SourceContext.create_node_traceability(
+                                    source_file_path=file_path,
+                                    source_file_type="dtsx",
+                                    xml_path=f"//SqlTask[contains(SqlCommand, '{table_name_clean}')]",
+                                    parent_package=os.path.basename(file_path).replace('.dtsx', '')
+                                )
+                            }
+                            
+                            # Add platform type mapping support
+                            if self.enable_type_mapping and self.target_platforms:
+                                table_properties["supported_platforms"] = [p.value for p in self.target_platforms]
+                                table_properties["type_mapping_enabled"] = True
+                            
+                            # Add schema introspection if connection context is available
+                            if conn_guid and conn_guid in self.connections_context:
+                                conn_info = self.connections_context[conn_guid]
+                                connection_string = conn_info.get("connection_string")
+                                if connection_string:
+                                    schema_info = self._introspect_table_schema(connection_string, table_name_clean)
+                                    table_properties["schema_details"] = schema_info
+                                    
+                                    # Add connection reference
+                                    table_properties["connection_id"] = conn_guid
+                                    table_properties["database"] = conn_info.get("database")
+                                    table_properties["server"] = conn_info.get("server")
+                            
+                            nodes.append(Node(
+                                node_id=table_id,
+                                node_type=NodeType.DATA_ASSET,
+                                name=table_name_clean,
+                                properties=table_properties,
+                            ))
+                        
+                        # Create edge to the table with SQL parsing traceability
+                        relation = EdgeType.READS_FROM if is_source else EdgeType.WRITES_TO
+                        edges.append(Edge(
+                            source_id=task_id, 
+                            target_id=table_id, 
+                            relation=relation,
+                            properties=SourceContext.create_edge_traceability(
+                                source_file_path=file_path,
+                                derivation_method="sql_parsing",
+                                xml_location="//property[@name='SqlCommand']",
+                                context_info=SourceContext.create_sql_derivation_context(
+                                    sql_statement=sql_command_prop.text,
+                                    component_type="Execute SQL Task",
+                                    property_name="SqlCommand"
+                                ),
+                                confidence_level="high"
+                            )
+                        ))
+                    
+                    # Store SQL semantics for later application to operation node
+                    # (Operation node may not be in nodes list yet at this point)
+                    if sql_semantics:
+                        # Return or store the SQL semantics to be applied to the operation node later
+                        self._pending_sql_semantics = {
+                            "task_id": task_id,
+                            "sql_semantics": sql_semantics.to_dict()
+                        }
+                    
+                    # Create JOIN relationship edges
+                    if sql_semantics and sql_semantics.joins:
+                        join_edges = create_join_edges_from_semantics(sql_semantics)
+                        for join_edge_data in join_edges:
+                            try:
+                                edges.append(Edge(
+                                    source_id=join_edge_data["source_id"],
+                                    target_id=join_edge_data["target_id"],
+                                    relation=EdgeType(join_edge_data["edge_type"]),
+                                    properties=join_edge_data["properties"]
+                                ))
+                            except ValueError:
+                                # Fallback to REFERENCES if new edge type not available
+                                edges.append(Edge(
+                                    source_id=join_edge_data["source_id"],
+                                    target_id=join_edge_data["target_id"],
+                                    relation=EdgeType.REFERENCES,
+                                    properties=join_edge_data["properties"]
+                                ))
+                    
+                    sql_tables_processed = True
+            
+            # Then, check for simple table references (OpenRowset, TableName) only if no SQL was processed
+            if not sql_tables_processed:
+                prop_names_to_check = ["OpenRowset", "TableName"]
+                for prop_name in prop_names_to_check:
+                    prop = properties_tag.find(f"property[@name='{prop_name}']")
+                    if prop is not None and prop.text:
                         table_name = prop.text
                         break
 
@@ -746,7 +908,13 @@ class CanonicalSsisParser:
                 # Enhanced table properties with schema introspection and platform mapping
                 table_properties = {
                     "technology": "SSIS",
-                    "table_name": table_name
+                    "table_name": table_name,
+                    **SourceContext.create_node_traceability(
+                        source_file_path=file_path,
+                        source_file_type="dtsx",
+                        xml_path=f"//DataFlowComponent[contains(@name, '{table_name}')]",
+                        parent_package=os.path.basename(file_path).replace('.dtsx', '')
+                    )
                 }
                 
                 # Add platform type mapping support for table-level operations
@@ -777,7 +945,24 @@ class CanonicalSsisParser:
                 )
 
             relation = EdgeType.READS_FROM if is_source else EdgeType.WRITES_TO
-            edges.append(Edge(source_id=task_id, target_id=table_id, relation=relation))
+            # Determine which property was used for the table reference
+            prop_name_used = "OpenRowset" if "OpenRowset" in str(properties_tag) else "TableName"
+            edges.append(Edge(
+                source_id=task_id, 
+                target_id=table_id, 
+                relation=relation,
+                properties=SourceContext.create_edge_traceability(
+                    source_file_path=file_path,
+                    derivation_method="xml_metadata",
+                    xml_location=f"//property[@name='{prop_name_used}']",
+                    context_info=SourceContext.create_xml_derivation_context(
+                        xml_element_name="property",
+                        xml_attribute="name",
+                        xml_property=prop_name_used
+                    ),
+                    confidence_level="high"
+                )
+            ))
 
     def _parse_parameter_mapping(
         self,
@@ -848,6 +1033,16 @@ class CanonicalSsisParser:
                     source_id=task_id,
                     target_id=connection_id_map[connection_ref],
                     relation=EdgeType.USES_CONNECTION,
+                    properties=SourceContext.create_edge_traceability(
+                        source_file_path=file_path,
+                        derivation_method="xml_metadata",
+                        xml_location="//SqlTaskData[@Connection]",
+                        context_info=SourceContext.create_xml_derivation_context(
+                            xml_element_name="SqlTaskData",
+                            xml_attribute="Connection"
+                        ),
+                        confidence_level="high"
+                    )
                 )
             )
 
@@ -986,6 +1181,7 @@ class CanonicalSsisParser:
         edges: List[Edge],
         connection_id_map: Dict[str, str],
         param_var_id_map: Dict[str, str],
+        file_path: str,
     ):
         """
         Parse Microsoft.OLEDBCommand components to extract SQL command logic.
@@ -1364,15 +1560,19 @@ class CanonicalSsisParser:
 
             param_id = f"parameter:{param_name}"
 
-            # Build properties
+            # Build properties with enhanced traceability
             properties = {
-                "file_path": file_path,
                 "technology": "SSIS",
                 "guid": param_guid.strip("{}"),
                 "data_type": param_data_type or "unknown",
                 "required": param_required.lower() == "true",
                 "value": param_value,
                 "scope": "package",
+                **SourceContext.create_node_traceability(
+                    source_file_path=file_path,
+                    source_file_type="dtsx",
+                    xml_path=f"//DTS:PackageParameter[@DTS:ObjectName='{param_name}']"
+                )
             }
 
             parameter_nodes.append(
@@ -1431,15 +1631,19 @@ class CanonicalSsisParser:
 
             var_id = f"variable:{var_namespace}.{var_name}"
 
-            # Build properties
+            # Build properties with enhanced traceability
             properties = {
-                "file_path": file_path,
                 "technology": "SSIS",
                 "guid": var_guid.strip("{}"),
                 "data_type": var_data_type,
                 "value": var_value,
                 "namespace": var_namespace,
                 "scope": "package",
+                **SourceContext.create_node_traceability(
+                    source_file_path=file_path,
+                    source_file_type="dtsx",
+                    xml_path=f"//DTS:Variable[@DTS:ObjectName='{var_name}']"
+                )
             }
 
             variable_nodes.append(
@@ -2285,6 +2489,52 @@ class CanonicalSsisParser:
             
         # Default to SQL Server if uncertain
         return TargetPlatform.SQL_SERVER
+    
+    def _extract_tables_from_sql(self, sql_text: str) -> List[str]:
+        """
+        Extract table names from SQL commands in SSIS components.
+        
+        This replaces the broken regex that only handled schema.table format.
+        Now handles:
+        - Simple tables: Products, Categories  
+        - Bracketed tables: [Products], [Categories]
+        - Schema-qualified: dbo.Products, [dbo].[Products]
+        - Table aliases: Products AS p, Categories c
+        - All JOIN types: INNER JOIN, LEFT JOIN, etc.
+        
+        Args:
+            sql_text: SQL command text from SSIS component
+            
+        Returns:
+            List of table names found in the SQL
+        """
+        if not sql_text or not isinstance(sql_text, str):
+            return []
+        
+        tables = set()
+        
+        # Pattern 1: Handle [schema].[table] format
+        bracketed_schema_pattern = r'(?:FROM|JOIN)\s+\[([^\]]+)\]\.\[([^\]]+)\](?:\s+(?:AS\s+)?\w+)?'
+        matches = re.findall(bracketed_schema_pattern, sql_text, re.IGNORECASE)
+        for schema, table in matches:
+            tables.add(f"{schema}.{table}")
+        
+        # Pattern 2: Handle schema.table format (no brackets)
+        plain_schema_pattern = r'(?:FROM|JOIN)\s+([^\s\[\]\.]+)\.([^\s\[\]\.]+)(?:\s+(?:AS\s+)?\w+)?'
+        matches = re.findall(plain_schema_pattern, sql_text, re.IGNORECASE)
+        for schema, table in matches:
+            if not any(existing == f"{schema}.{table}" for existing in tables):
+                tables.add(f"{schema}.{table}")
+        
+        # Pattern 3: Handle simple table names (only if not already captured above)
+        simple_pattern = r'(?:FROM|JOIN)\s+\[?([^\s\[\]\.]+)\]?(?:\s+(?:AS\s+)?\w+)?'
+        matches = re.findall(simple_pattern, sql_text, re.IGNORECASE)
+        for table in matches:
+            # Only add if this table isn't already part of a schema.table entry
+            if not any(existing.endswith(f".{table}") for existing in tables):
+                tables.add(table)
+        
+        return sorted(list(tables))
     
     def _get_platform_type_rules(self, platform: TargetPlatform) -> Dict[str, str]:
         """

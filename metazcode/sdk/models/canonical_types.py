@@ -43,3 +43,6 @@ class EdgeType(str, Enum):
     # Cross-Package Dependency Types
     DEPENDS_ON = "depends_on"
     SHARES_RESOURCE = "shares_resource"
+    # SQL Semantic Types for Migration
+    JOINS_WITH = "joins_with"
+    ALIASES_AS = "aliases_as"

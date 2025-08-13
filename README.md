@@ -169,7 +169,7 @@ After running your analysis:
 
 ## 🤝 Contributing
 
-MetaZenseCode is designed for extensibility. We welcome contributions that help organizations better understand and optimize their data infrastructure.
+MZCode is designed for extensibility. We welcome contributions that help organizations better understand and optimize their data infrastructure.
 
 ---
 

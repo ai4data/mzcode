@@ -110,12 +110,12 @@ class MemgraphClient(GraphClientInterface):
         if properties:
             prop_string = ", ".join([f"{key}: ${key}" for key in properties.keys()])
             query = f"""
-            MERGE (n {{id: $node_id}})
+            MERGE (n:Node {{id: $node_id}})
             SET n += {{{prop_string}}}
             """
         else:
             query = f"""
-            MERGE (n {{id: $node_id}})
+            MERGE (n:Node {{id: $node_id}})
             """
 
         parameters = {"node_id": node_id, **properties}
@@ -151,14 +151,14 @@ class MemgraphClient(GraphClientInterface):
                 [f"{key}: ${key}" for key in filtered_properties.keys()]
             )
             query = f"""
-            MATCH (source {{id: $source_id}})
-            MATCH (target {{id: $target_id}})
+            MATCH (source:Node {{id: $source_id}})
+            MATCH (target:Node {{id: $target_id}})
             MERGE (source)-[r:{relation_type} {{{prop_string}}}]->(target)
             """
         else:
             query = f"""
-            MATCH (source {{id: $source_id}})
-            MATCH (target {{id: $target_id}})
+            MATCH (source:Node {{id: $source_id}})
+            MATCH (target:Node {{id: $target_id}})
             MERGE (source)-[r:{relation_type}]->(target)
             """
 

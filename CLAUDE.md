@@ -9,45 +9,124 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Install dependencies (requires uv package manager)
 uv sync
 
-# For Memgraph database support
+# For Memgraph database support (enterprise/large-scale analysis)
 uv sync --extra memgraph
 
-# Start Memgraph database (optional, for large-scale analysis)
+# Start Memgraph database (optional)
 docker-compose up -d
 
-# Run installation test
+# Quick setup validation
 uv run python test_installation.py
-
-# Quick test script
 ./test.sh
 ```
 
 ### Main Commands
 ```bash
-# Complete SSIS analysis (recommended for most users)
+# Complete SSIS analysis (recommended workflow)
 uv run python -m metazcode full --path <ssis_project_path>
 
-# Step-by-step analysis
+# Step-by-step analysis workflow
 uv run python -m metazcode ingest --path <ssis_project_path>
 uv run python -m metazcode analyze --path <ssis_project_path>
 
-# Generate visualization
+# Export and visualization
+uv run python -m metazcode dump --path <ssis_project_path> --output results.json
 uv run python -m metazcode visualize --path <ssis_project_path>
 
-# Export graph data
-uv run python -m metazcode dump --path <ssis_project_path> --output results.json
-
-# Run tests
-uv run python -m pytest  # (if pytest is available)
+# Combined ingestion and indexing
+uv run python -m metazcode ingest-n-index --path <ssis_project_path>
 ```
+
+### Testing and Development
+```bash
+# Run comprehensive validation script (primary test command)
+./test.sh
+
+# Test with sample data
+uv run python -m metazcode full --path data/ssis/dataWH_ssis
+
+# Install dev dependencies for code quality tools
+uv sync --extra dev
+
+# Run all tests (pytest in dev dependencies) 
+uv run python -m pytest
+
+# Test specific components with sample data
+uv run python -m metazcode ingest --path data/ssis/dataWH_ssis
+uv run python -m metazcode analyze --path data/ssis/dataWH_ssis
+```
+
+### Code Quality
+Currently no linting or formatting tools configured. Consider adding:
+- `ruff` for linting and formatting
+- `mypy` for type checking
+- `pre-commit` for automated quality checks
 
 ### CLI Command Reference
 - `full` / `complete`: Complete analysis pipeline (ingest + analyze + index)
 - `ingest`: Extract business logic from SSIS packages
-- `analyze`: Perform cross-package dependency analysis
+- `analyze`: Perform cross-package dependency analysis  
 - `visualize`: Generate graph visualization
 - `dump`: Export graph data to JSON
-- `ingest_n_index`: Run ingestion and indexing together
+- `ingest-n-index`: Run ingestion and indexing together
+
+### Environment Configuration
+```bash
+# Copy example environment file
+cp .env.example .env
+
+# Key environment variables:
+# METAZCODE_DB_BACKEND=networkx|memgraph (default: networkx)
+# MEMGRAPH_HOST=localhost (for database backend)
+# METAZCODE_ENABLE_CROSS_ANALYSIS=true
+# METAZCODE_ENABLE_INDEXING=true
+```
+
+### Memgraph Database Commands
+```bash
+# Start Memgraph database
+docker-compose up -d
+
+# Check Memgraph status
+docker ps | grep memgraph
+
+# View Memgraph logs
+docker logs mzcode-memgraph
+
+# Access Memgraph Lab (web interface)
+# Visit http://localhost:3000 in browser
+
+# Run analysis with Memgraph backend
+METAZCODE_DB_BACKEND=memgraph uv run python -m metazcode full --path <ssis_project_path>
+
+# Test Memgraph connection
+MEMGRAPH_USERNAME=admin MEMGRAPH_PASSWORD=admin uv run python -c "
+from metazcode.sdk.graph.graph_constructor import GraphClientBuilder
+from metazcode.sdk.models.config import DatabaseConfig
+import os
+os.environ['MEMGRAPH_USERNAME'] = 'admin'
+os.environ['MEMGRAPH_PASSWORD'] = 'admin'
+config = DatabaseConfig.from_environment()
+config.backend = 'memgraph'
+is_valid = GraphClientBuilder.validate_connection(config)
+print(f'Connection valid: {is_valid}')
+"
+
+# Check database content after analysis
+MEMGRAPH_USERNAME=admin MEMGRAPH_PASSWORD=admin uv run python -c "
+from metazcode.sdk.models.config import DatabaseConfig
+from metazcode.sdk.graph.client_memgraph import MemgraphClient
+import os
+os.environ['MEMGRAPH_USERNAME'] = 'admin'
+os.environ['MEMGRAPH_PASSWORD'] = 'admin'
+config = DatabaseConfig.from_environment()
+config.backend = 'memgraph'
+client = MemgraphClient(config)
+print(f'Node count: {client.get_node_count()}')
+print(f'Edge count: {client.get_edge_count()}')
+client.close()
+"
+```
 
 ## Architecture
 
@@ -129,15 +208,105 @@ uv run python -m pytest  # (if pytest is available)
 
 ## Development Notes
 
-- The codebase uses a plugin-based architecture for ingestion tools
-- Graph operations are abstracted through `GraphClientInterface`
-- All file paths should be absolute when working with the API
-- The system supports multiple target platforms for data type mapping
-- Enhanced analysis results are saved as JSON for external consumption
+### Working with the Codebase
+- **Plugin-based architecture**: New ingestion tools extend `IngestionTool` base class in `metazcode/sdk/ingestion/`
+- **Automatic tool discovery**: `Orchestrator` in `metazcode/cli/orchestrator.py` automatically discovers and runs all ingestion tools
+- **Graph backend abstraction**: All graph operations go through `GraphClientInterface` (NetworkX or Memgraph backends)
+- **File path requirements**: Must use absolute paths when calling API programmatically
+- **Type mapping**: Multiple target platform support via `type_mapping.py` for data type conversions
+- **JSON output**: Enhanced analysis results always saved as JSON for external tool integration
+- **Database configuration**: Uses `DatabaseConfig` and `MetaZenseConfig` for environment-aware setup
+
+### Adding New Ingestion Tools
+To create a new ingestion tool for other platforms:
+
+1. **Create new tool class**: Extend `IngestionTool` in `metazcode/sdk/ingestion/`
+2. **Implement required methods**: 
+   - `ingest()`: Generator yielding `(List[Node], List[Edge])` tuples
+   - Use canonical node/edge types from `canonical_types.py`
+3. **File discovery**: Use `discover_files(pattern)` method to find relevant files
+4. **Auto-discovery**: Tool will be automatically found by `Orchestrator`
+
+Example skeleton:
+```python
+from metazcode.sdk.ingestion.ingestion_tool import IngestionTool
+from metazcode.sdk.models.canonical_types import NodeType, EdgeType
+from metazcode.sdk.models.graph import Node, Edge
+
+class MyPlatformTool(IngestionTool):
+    def ingest(self):
+        files = self.discover_files("*.myext")
+        for file in files:
+            # Parse file and create nodes/edges
+            nodes = [Node(id="...", type=NodeType.PIPELINE, ...)]
+            edges = [Edge(source="...", target="...", type=EdgeType.CONTAINS)]
+            yield nodes, edges
+```
+
+### Key Integration Points
+- `metazcode/cli/orchestrator.py`: Discovers and coordinates ingestion tools
+- `metazcode/sdk/graph/graph_client_interface.py`: Backend abstraction layer
+- `metazcode/sdk/models/canonical_types.py`: Core data model definitions
+- `metazcode/sdk/integration/index_integration.py`: Search capability integration
+
+### Package Structure Understanding
+- `cli/`: Command-line interface and orchestration
+- `sdk/ingestion/`: SSIS file parsing and data extraction
+- `sdk/graph/`: Graph backends (NetworkX in-memory, Memgraph persistent)
+- `sdk/analysis/`: Cross-package dependency analysis algorithms
+- `sdk/indexing/`: Search and metadata indexing
+- `sdk/models/`: Canonical data types and configuration
 
 ## Output Files
 
-- `enhanced_graph_full_analysis.json`: Complete graph with all analysis
-- `enhanced_graph_with_dependencies.json`: Graph with cross-package dependencies
-- Analysis result JSON files when `--output` is specified
+- `enhanced_graph_full_analysis.json`: Complete analysis with all metadata
+- `enhanced_graph_with_dependencies.json`: Graph with cross-package dependencies only
+- Custom output files when `--output` flag is specified
 - Index files for search capabilities when `--index-output` is specified
+
+## Development Troubleshooting
+
+### Common Issues
+- **"No .dtsx files found"**: Verify the path contains SSIS files with `ls <path>/*.dtsx`
+- **"uv not found"**: Install uv package manager: `curl -LsSf https://astral.sh/uv/install.sh | sh`
+- **Import/dependency errors**: Run `uv sync` to reinstall dependencies
+- **Memgraph connection issues**: Ensure Docker container is running: `docker-compose up -d && docker ps | grep memgraph`
+- **Permission errors**: Use absolute paths and ensure read access to SSIS project directories
+- **Database connection timeouts**: Check if Memgraph is fully started with `docker logs mzcode-memgraph`
+- **Empty analysis results**: Ensure SSIS project contains valid .dtsx files and check file permissions
+
+### Debugging Commands
+```bash
+# Enable debug logging for detailed analysis output
+METAZCODE_LOG_LEVEL=DEBUG uv run python -m metazcode full --path <ssis_project_path>
+
+# Test specific SSIS files
+find <path> -name "*.dtsx" -exec ls -la {} \;
+
+# Validate environment variables
+env | grep METAZCODE
+env | grep MEMGRAPH
+
+# Test database backends separately
+# NetworkX (in-memory)
+METAZCODE_DB_BACKEND=networkx uv run python -m metazcode ingest --path data/ssis/dataWH_ssis
+
+# Memgraph (persistent)
+METAZCODE_DB_BACKEND=memgraph uv run python -m metazcode ingest --path data/ssis/dataWH_ssis
+
+# Check available sample data
+ls -la data/ssis/*/
+```
+
+### Quick Validation
+```bash
+# Verify installation is working
+./test.sh
+
+# Test with sample data to validate functionality
+uv run python -m metazcode full --path data/ssis/dataWH_ssis
+
+# Validate specific components
+uv run python -m metazcode ingest --path data/ssis/dataWH_ssis
+uv run python -m metazcode analyze --path data/ssis/dataWH_ssis
+```
