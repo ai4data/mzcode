@@ -11,6 +11,7 @@ from metazcode.cli.orchestrator import Orchestrator
 from metazcode.sdk.models.canonical_types import NodeType
 from metazcode.sdk.integration.index_integration import IndexIntegration
 from metazcode.sdk.models.config import DatabaseConfig, MetaZenseConfig
+from metazcode.sdk.enrichment import EnrichmentPipeline
 
 
 def database_option(f):
@@ -614,6 +615,11 @@ def ingest_n_index(
     is_flag=True,
     help="Enable verbose logging to see detailed progress.",
 )
+@click.option(
+    "--enable-llm",
+    is_flag=True,
+    help="Enable LLM enrichment of nodes with business summaries.",
+)
 @database_option
 def full(
     path: str,
@@ -621,6 +627,7 @@ def full(
     index_output: Optional[str],
     project_id: Optional[str],
     verbose: bool,
+    enable_llm: bool,
     database: Optional[str],
     memgraph_host: Optional[str],
     memgraph_port: Optional[int],
@@ -737,9 +744,55 @@ def full(
             for risk in contention_risks["high_risk_connections"]:
                 click.echo(f"   {risk['connection']}: {risk['package_count']} packages")
 
-        # Phase 3: Enhanced Indexing
+        # Phase 3: LLM Enrichment (Optional)
+        if enable_llm or os.getenv("METAZCODE_ENABLE_LLM_ENRICHMENT", "false").lower() == "true":
+            click.echo("")
+            click.echo("Phase 3: LLM Enrichment (AI-Generated Summaries)")
+            click.echo("-" * 50)
+
+            # Create configuration with LLM settings
+            config = MetaZenseConfig.from_environment()
+            config.enable_llm_enrichment = True
+            
+            # Initialize and run enrichment pipeline
+            enrichment_pipeline = EnrichmentPipeline(graph_client)
+            
+            # Validate configuration before running
+            validation = enrichment_pipeline.validate_configuration()
+            if not validation["ready"]:
+                click.echo("LLM Enrichment configuration issues:", err=True)
+                if not validation["api_key_present"]:
+                    click.echo(f"   ❌ No API key found: set OPENAI_API_KEY environment variable", err=True)
+                if not validation["api_key_format"]:
+                    click.echo(f"   ❌ Invalid API key format", err=True)
+                if not validation["model_supported"]:
+                    click.echo(f"   ❌ Unsupported model", err=True)
+                if not validation["graph_client_connected"]:
+                    click.echo(f"   ❌ Graph client not connected", err=True)
+                click.echo("Skipping LLM enrichment phase")
+            else:
+                # Run enrichment
+                enrichment_results = enrichment_pipeline.enrich_graph()
+                
+                if enrichment_results["status"] == "completed":
+                    summary = enrichment_results["summary"]
+                    click.echo(f"LLM Enrichment complete:")
+                    click.echo(f"   Nodes processed: {summary['total_nodes']}")
+                    click.echo(f"   Successfully enriched: {summary['successfully_enriched']}")
+                    click.echo(f"   Failed: {summary['failed']}")
+                    click.echo(f"   Success rate: {summary['success_rate']:.1f}%")
+                    
+                    if "token_usage" in enrichment_results:
+                        tokens = enrichment_results["token_usage"]
+                        if tokens.get("total_tokens", 0) > 0:
+                            click.echo(f"   Tokens used: {tokens['total_tokens']}")
+                else:
+                    click.echo(f"LLM Enrichment failed: {enrichment_results.get('reason', 'Unknown error')}")
+
+        # Phase 4: Enhanced Indexing
         click.echo("")
-        click.echo("Phase 3: Enhanced Indexing (Search Capabilities)")
+        phase_num = "Phase 4" if enable_llm or os.getenv("METAZCODE_ENABLE_LLM_ENRICHMENT", "false").lower() == "true" else "Phase 3"
+        click.echo(f"{phase_num}: Enhanced Indexing (Search Capabilities)")
         click.echo("-" * 50)
 
         integration = IndexIntegration()
@@ -784,10 +837,11 @@ def full(
                     f"   Cross-package pipelines: {ssis_stats.get('cross_package_pipelines_indexed', 0)}"
                 )
 
-        # Phase 4: Analytics Preparation (Application Readiness)
+        # Final Phase: Analytics Preparation (Application Readiness)
         if db_config.backend == "memgraph":
             click.echo("")
-            click.echo("Phase 4: Analytics Preparation (Application Readiness)")
+            final_phase_num = "Phase 5" if enable_llm or os.getenv("METAZCODE_ENABLE_LLM_ENRICHMENT", "false").lower() == "true" else "Phase 4"
+            click.echo(f"{final_phase_num}: Analytics Preparation (Application Readiness)")
             click.echo("-" * 50)
             
             # Trigger analytics preparation for downstream applications
@@ -914,15 +968,174 @@ def full(
             click.echo(traceback.format_exc(), err=True)
 
 
+@cli.command()
+@click.option(
+    "--path",
+    default=".",
+    help="The path to the project directory to enrich.",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Force re-enrichment of already enriched nodes.",
+)
+@click.option(
+    "--node-types",
+    default="operation,pipeline",
+    help="Comma-separated list of node types to enrich (operation, pipeline).",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Enable verbose logging to see detailed progress.",
+)
+@database_option
+def enrich(
+    path: str,
+    force: bool,
+    node_types: str,
+    verbose: bool,
+    database: Optional[str],
+    memgraph_host: Optional[str],
+    memgraph_port: Optional[int],
+    memgraph_username: Optional[str],
+    memgraph_password: Optional[str],
+):
+    """
+    Run LLM enrichment on an existing graph.
+    
+    This command adds AI-generated business summaries to SSIS operations and
+    pipelines, enriching the graph with human-readable context for migration
+    planning and documentation.
+    
+    Example: metazcode enrich --path ./data/ssis/project
+    """
+    # Setup logging
+    if verbose:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+
+    click.echo(f"🤖 Starting LLM enrichment for: {os.path.abspath(path)}")
+    
+    # Parse node types
+    target_types = []
+    type_mapping = {
+        'operation': NodeType.OPERATION,
+        'pipeline': NodeType.PIPELINE
+    }
+    
+    for type_str in node_types.lower().split(','):
+        type_str = type_str.strip()
+        if type_str in type_mapping:
+            target_types.append(type_mapping[type_str])
+        else:
+            click.echo(f"Warning: Unknown node type '{type_str}', ignoring")
+    
+    if not target_types:
+        click.echo("Error: No valid node types specified", err=True)
+        return
+
+    try:
+        # Build the graph client
+        db_config = get_database_config(
+            database, memgraph_host, memgraph_port, memgraph_username, memgraph_password
+        )
+        
+        if not GraphClientBuilder.validate_connection(db_config):
+            click.echo(
+                f"Warning: Could not connect to {db_config.backend} backend. Falling back to NetworkX.",
+                err=True,
+            )
+        
+        graph_client = GraphClientBuilder.get_client(db_config)
+        
+        # Validate path and load graph if needed
+        p = Path(path)
+        if p.is_dir():
+            root_path = str(p.resolve())
+            target_file = None
+        elif p.is_file():
+            root_path = str(p.parent.resolve())
+            target_file = str(p.resolve())
+        else:
+            click.echo(f"Error: Path '{path}' not found.", err=True)
+            return
+        
+        # Load graph if empty
+        node_count = graph_client.get_node_count()
+        if node_count == 0:
+            click.echo("Graph is empty, loading from path...")
+            orchestrator = Orchestrator(
+                graph_client=graph_client, 
+                root_path=root_path, 
+                target_file=target_file
+            )
+            orchestrator.run()
+            node_count = graph_client.get_node_count()
+            click.echo(f"Loaded {node_count} nodes")
+        
+        # Configure enrichment
+        config = MetaZenseConfig.from_environment()
+        config.enable_llm_enrichment = True
+        
+        # Initialize enrichment pipeline
+        enrichment_pipeline = EnrichmentPipeline(graph_client)
+        
+        # Validate configuration
+        validation = enrichment_pipeline.validate_configuration()
+        if not validation["ready"]:
+            click.echo("❌ LLM Enrichment configuration issues:")
+            if not validation["api_key_present"]:
+                click.echo(f"   No API key found: set OPENAI_API_KEY environment variable")
+            if not validation["api_key_format"]:
+                click.echo(f"   Invalid API key format")
+            if not validation["model_supported"]:
+                click.echo(f"   Unsupported model")
+            if not validation["graph_client_connected"]:
+                click.echo(f"   Graph client not connected")
+            return
+        
+        # Run enrichment
+        enrichment_results = enrichment_pipeline.enrich_graph(node_types=target_types)
+        
+        # Display results
+        if enrichment_results["status"] == "completed":
+            summary = enrichment_results["summary"]
+            click.echo("")
+            click.echo("✅ LLM Enrichment completed successfully!")
+            click.echo(f"   Nodes processed: {summary['total_nodes']}")
+            click.echo(f"   Successfully enriched: {summary['successfully_enriched']}")
+            click.echo(f"   Failed: {summary['failed']}")
+            click.echo(f"   Skipped: {summary['skipped']}")
+            click.echo(f"   Success rate: {summary['success_rate']:.1f}%")
+            
+            if "token_usage" in enrichment_results:
+                tokens = enrichment_results["token_usage"]
+                if tokens.get("total_tokens", 0) > 0:
+                    click.echo(f"   API tokens used: {tokens['total_tokens']}")
+        else:
+            click.echo(f"❌ Enrichment failed: {enrichment_results.get('reason', 'Unknown error')}")
+    
+    except Exception as e:
+        click.echo(f"Error during enrichment: {e}", err=True)
+        if verbose:
+            import traceback
+            click.echo(traceback.format_exc(), err=True)
+
+
 # Alias command for shorter usage
 @cli.command()
 @click.option("--path", default=".", help="The path to the project directory.")
 @click.option("--output", default=None, help="Path to save analysis results.")
+@click.option("--enable-llm", is_flag=True, help="Enable LLM enrichment.")
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose logging.")
 @database_option
 def complete(
     path: str,
     output: Optional[str],
+    enable_llm: bool,
     verbose: bool,
     database: Optional[str],
     memgraph_host: Optional[str],
@@ -948,6 +1161,7 @@ def complete(
         index_output=None,
         project_id=None,
         verbose=verbose,
+        enable_llm=enable_llm,
         database=database,
         memgraph_host=memgraph_host,
         memgraph_port=memgraph_port,

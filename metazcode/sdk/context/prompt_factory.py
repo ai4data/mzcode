@@ -30,6 +30,21 @@ class OperationContext:
     business_domain: str = "data processing"
 
 
+@dataclass
+class PipelineContext:
+    """Structured representation of pipeline context for prompt generation."""
+    
+    pipeline_name: str
+    operation_count: int
+    source_tables: List[str]
+    destination_tables: List[str]
+    operations: List[Dict[str, Any]] = None
+    
+    def __post_init__(self):
+        if self.operations is None:
+            self.operations = []
+
+
 class PromptFactory:
     """
     Factory for generating context-aware prompts for LLM operation summaries.
@@ -48,24 +63,40 @@ class PromptFactory:
 
     def _get_business_summary_template(self) -> str:
         """
-        Get the main business-focused summary template.
-
-        This template focuses on business purpose and keeps to 1-2 sentences.
+        Get the comprehensive AI Data Architect prompt template for operation enrichment.
+        
+        This template implements a structured persona-based approach with clear rules
+        and specific instructions for different node types.
         """
-        return """Based on the following SSIS operation context, provide a concise 1-2 sentence business summary that explains WHAT this operation accomplishes and WHY it's important for the business:
+        return """You are an expert AI Data Architect. Your specialized task is to analyze individual nodes from a legacy ETL knowledge graph and generate a concise, human-readable `llm_summary` for each one.
 
+**Your Goal:** The `llm_summary` must translate the technical metadata into a clear statement of **business purpose and intent**. The primary audience for this summary is a downstream AI migration agent and human data engineers who need to quickly understand the role of each component in the overall data flow.
+
+**Core Principles:**
+1. **Source of Truth:** You will derive your summary ONLY from the information provided. Do not invent or infer information that isn't supported by the provided data.
+2. **Acknowledge Missing Information:** If critical information (like SQL queries) is missing or null, explicitly state that (e.g., "The specific transformation logic for this operation was not captured.").
+3. **Translate, Don't Just Repeat:** Do not simply restate property names. Synthesize values into meaningful narrative. For example, instead of "name is dbo.Fact_SalesOrder," write "This is a fact table containing sales order metrics."
+4. **Style Guide:**
+   - Use **active voice** (e.g., "This pipeline loads..." not "Data is loaded by this pipeline...").
+   - Be **concise**. Aim for 1-3 sentences.
+   - **Identify Patterns:** Use your knowledge to identify common data warehousing patterns (e.g., "staging table," "fact table," "dimension load," "initial full load," "incremental update").
+
+**Analysis Context:**
 Operation: {operation_name}
+Operation Type: {operation_subtype}
 Pipeline: {pipeline_name}
 Data Sources: {sources}
 Data Destinations: {destinations}
 Transformations: {transformation_summary}
 
-Focus on:
-- Business purpose (what business need does this serve?)
-- Data value (what insights or capabilities does this enable?)
-- Avoid technical jargon - explain in business terms
+**Instructions for Operation Nodes:**
+Describe the specific action this operation performs and its place in the data transformation journey. Look for:
+- The human-given name as a strong indicator (e.g., "Load DW Dim LV1," "Truncate Staging Tables")
+- Operation subtype (data flow vs script execution task)
+- Transformation logic intent if present (deletes records, updates flags, calls procedures)
+- Column transformations and data flow patterns
 
-Business Summary:"""
+Generate a concise llm_summary that explains what this operation accomplishes in business terms:"""
 
     def _get_technical_summary_template(self) -> str:
         """
@@ -115,6 +146,7 @@ Context Analysis:"""
         """
         return self.templates["business_summary"].format(
             operation_name=context.operation_name,
+            operation_subtype=context.operation_type,
             pipeline_name=context.pipeline_name,
             sources=self._format_connections(context.source_connections),
             destinations=self._format_connections(context.destination_connections),
@@ -310,7 +342,7 @@ Context Analysis:"""
         self, pipeline_context: "PipelineContext"
     ) -> str:
         """
-        Create a business-focused prompt for pipeline summary.
+        Create a structured AI Data Architect prompt for pipeline summary.
 
         Args:
             pipeline_context: Structured pipeline context
@@ -318,19 +350,33 @@ Context Analysis:"""
         Returns:
             Formatted prompt ready for LLM
         """
-        template = """Based on the following SSIS pipeline context, provide a concise 1-2 sentence business summary that explains WHAT this pipeline accomplishes and WHY it's important for the business:
+        template = """You are an expert AI Data Architect. Your specialized task is to analyze individual pipeline nodes from a legacy ETL knowledge graph and generate a concise, human-readable `llm_summary`.
 
+**Your Goal:** Translate the technical metadata into a clear statement of **business purpose and intent**. The primary audience is downstream AI migration agents and human data engineers.
+
+**Core Principles:**
+1. **Source of Truth:** Derive your summary ONLY from the provided information.
+2. **Acknowledge Missing Information:** If critical details are missing, explicitly state that.
+3. **Translate, Don't Repeat:** Synthesize into meaningful narrative, don't just restate properties.
+4. **Style Guide:**
+   - Use **active voice** (e.g., "This pipeline loads..." not "Data is loaded...")
+   - Be **concise**. Aim for 1-3 sentences.
+   - **Identify Patterns:** Recognize common ETL patterns (initial load, incremental update, staging, dimension load).
+
+**Pipeline Analysis Context:**
 Pipeline: {pipeline_name}
-Operations: {operation_count} operations
+Operations: {operation_count} data transformation steps
 Data Sources: {sources}
 Data Destinations: {destinations}
-Data Flow: {data_flow_summary}
 
-Focus on:
-- Business purpose (what business need does this pipeline serve?)
-- Data value (what insights or capabilities does this pipeline enable?)
-- Overall workflow objective
-- Avoid technical jargon - explain in business terms
+**Instructions for Pipeline Nodes:**
+Explain the overall business process this pipeline accomplishes and its role in the ETL sequence. Look for:
+- Name keywords like "firsttime," "nexttime," "daily," "initial" to understand load patterns
+- Data domains involved (Sales, HumanResources, Finance) from table names
+- Dependencies and execution order implications
+- Overall data flow from sources through transformations to destinations
+
+Focus on what business process this pipeline supports and what value it provides.
 
 Business Summary:"""
 
@@ -339,7 +385,6 @@ Business Summary:"""
             operation_count=pipeline_context.operation_count,
             sources=self._format_connections(pipeline_context.source_tables),
             destinations=self._format_connections(pipeline_context.destination_tables),
-            data_flow_summary=pipeline_context.data_flow_summary,
         )
 
     def create_pipeline_domain_specific_prompt(

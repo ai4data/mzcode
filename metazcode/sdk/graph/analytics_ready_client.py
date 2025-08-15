@@ -36,6 +36,10 @@ class AnalyticsReadyMemgraphClient(MemgraphClient):
         self._optimization_completed = False
         logger.info("Initialized analytics-ready Memgraph client")
     
+    def execute_query(self, query: str, parameters: Optional[Dict[str, Any]] = None) -> List[Any]:
+        """Execute a Cypher query with optional parameters (public method for enrichment)."""
+        return self._execute_query(query, parameters)
+    
     def prepare_for_applications(self):
         """
         Prepare the graph for downstream application consumption.
@@ -77,7 +81,8 @@ class AnalyticsReadyMemgraphClient(MemgraphClient):
             "CREATE INDEX ON :Node(name);",
             
             # Application-specific performance indexes
-            "CREATE TEXT INDEX application_search ON :Node(properties);",
+            # Note: Memgraph doesn't support CREATE TEXT INDEX syntax
+            # "CREATE TEXT INDEX application_search ON :Node(properties);",
             "CREATE INDEX ON :Node(technology);",
             
             # Cross-package analysis indexes  
@@ -88,11 +93,15 @@ class AnalyticsReadyMemgraphClient(MemgraphClient):
         created_count = 0
         for index_query in indexes:
             try:
-                self._execute_query(index_query)
+                # For Memgraph, indexes must be created in auto-commit mode
+                # Use a separate cursor without explicit transaction
+                cursor = self._connection.cursor()
+                cursor.execute(index_query)
+                # Don't call commit() - let it auto-commit
                 created_count += 1
                 logger.debug(f"Created index: {index_query}")
             except Exception as e:
-                logger.debug(f"Index creation skipped (may exist): {e}")
+                logger.debug(f"Index creation skipped (may exist or not supported): {e}")
         
         logger.info(f"✅ Created {created_count} performance indexes")
     

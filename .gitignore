@@ -59,6 +59,7 @@
   archive/
   img/
   output/
+  scripts/
   *.log
   *.tmp
   .DS_Store
@@ -66,9 +67,16 @@
 # Docker volumes
   memgraph-data/
 
-# Environment files (keep example only)
-  .env
-  !.env.example
+# Environment files
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# IDE/Editor files
+.claude/
+.vscode/
+*.local.json
 
 # Lock files (optional - you might want to keep these)
 # uv.lock

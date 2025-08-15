@@ -1,8 +1,18 @@
 # MetaZenseCode
 
-**Transform your SSIS packages into intelligent business insights**
+**Transform your ETL packages into intelligent business insights**
 
-MetaZenseCode automatically analyzes your SSIS projects and creates comprehensive dependency maps that power migration planning, compliance reporting, and business process optimization.
+MetaZenseCode automatically analyzes your ETL projects and creates comprehensive dependency maps enhanced with AI-generated business summaries. Perfect for migration planning, compliance reporting, and business process optimization.
+
+## 🌟 AI-Powered Business Intelligence
+
+**NEW**: Transform technical ETL metadata into clear business insights with our optional LLM enrichment pipeline.
+
+- 🤖 **AI Data Architect Analysis** - GPT-4o-mini generates business-focused summaries
+- 📊 **Smart Operation Understanding** - "Aggregates daily sales by territory for revenue tracking"
+- 🎯 **Migration-Ready Context** - Perfect input for AI migration tools and human planners
+- ⚡ **Technology Agnostic** - Works with any ETL platform metadata
+- 🔒 **Privacy First** - Only metadata sent to AI, never your actual data
 
 ## 🚀 Quick Start
 
@@ -19,23 +29,34 @@ uv sync
 uv run python -m metazcode full --path "path/to/your/ssis/project"
 ```
 
-### 3. See Results
+### 3. Optional: Enable AI-Powered Insights
+```bash
+# Add your OpenAI API key for intelligent business summaries
+echo "OPENAI_API_KEY=your_api_key_here" >> .env
+
+# Run analysis with AI enrichment
+uv run python -m metazcode full --path "path/to/your/project" --enable-llm
+```
+
+### 4. See Results
 Your analysis creates a comprehensive report showing:
-- 📊 All SSIS packages and their operations
+- 📊 All ETL packages and their operations
 - 🔗 Dependencies between packages
 - ⚠️ Potential risks and bottlenecks
 - 📋 Execution order recommendations
+- 🤖 **AI-generated business summaries** (when LLM enrichment enabled)
 
 ## ✨ What You Get
 
 ### Beautiful Analysis Report
 ```
-🚀 Starting Complete SSIS Analysis
-📁 Project path: /your/ssis/project
+🚀 Starting Complete ETL Analysis
+📁 Project path: /your/etl/project
 
 ✅ Found 15 packages, extracted 67 operations
 ✅ Discovered 8 cross-package dependencies
 ✅ Identified 3 shared resources
+🤖 Generated 67 AI business summaries (LLM enrichment enabled)
 
 📋 Execution Order:
    Level 1: CustomerETL, ProductETL (can run in parallel)
@@ -51,15 +72,30 @@ Your analysis creates a comprehensive report showing:
 
 ### Rich Output Files
 - **enhanced_graph_full_analysis.json** - Complete analysis with all metadata
+- **AI-enriched summaries** - Business-focused operation descriptions (with LLM)
 - **Terminal report** - Immediate insights and recommendations
+
+### Sample AI-Enhanced Output
+```json
+{
+  "operation_12345": {
+    "name": "Load Customer Dimension",
+    "type": "Data Flow Task",
+    "llm_summary": "Loads customer master data into the data warehouse dimension table, supporting customer analytics and segmentation reporting.",
+    "sources": ["CRM_Database.dbo.Customers"],
+    "destinations": ["DataWarehouse.dbo.DimCustomer"]
+  }
+}
+```
 
 ## 🎯 Perfect For
 
-- **🔄 SSIS Migration Planning** - Map your current state before moving to cloud
+- **🔄 ETL Migration Planning** - Map your current state before moving to cloud
 - **📊 Impact Analysis** - Understand what changes when you modify a package
 - **🚨 Risk Assessment** - Identify bottlenecks and failure points
-- **📋 Documentation** - Auto-generate comprehensive SSIS documentation
+- **📋 Documentation** - Auto-generate comprehensive ETL documentation with AI insights
 - **🛡️ Compliance** - Track data flows for audit and regulatory requirements
+- **🤖 AI-Assisted Analysis** - Get business-focused summaries of complex operations
 
 ## 🗄️ Storage Options
 
@@ -97,10 +133,13 @@ uv run python -m metazcode full --path data/ssis/dataWH_ssis
 cat enhanced_graph_full_analysis.json
 ```
 
-### Analyze Your Own SSIS Project
+### Analyze Your Own ETL Project
 ```bash
-# Point to your SSIS project folder
-uv run python -m metazcode full --path "C:\YourSSISProjects\MyProject"
+# Point to your ETL project folder
+uv run python -m metazcode full --path "C:\YourETLProjects\MyProject"
+
+# With AI enrichment for business insights
+uv run python -m metazcode full --path "C:\YourETLProjects\MyProject" --enable-llm
 
 # Or just a single package
 uv run python -m metazcode full --path "C:\MyPackage.dtsx"
@@ -108,6 +147,7 @@ uv run python -m metazcode full --path "C:\MyPackage.dtsx"
 
 ## 🔧 Advanced Options
 
+### Standard Analysis
 ```bash
 # Save analysis to custom file
 uv run python -m metazcode full --path "your/project" --output "my_analysis.json"
@@ -120,19 +160,39 @@ uv run python -m metazcode full --path "your/project" \
   --database memgraph --memgraph-host localhost --memgraph-port 7687
 ```
 
+### AI-Powered Analysis
+```bash
+# Enable LLM enrichment with business summaries
+uv run python -m metazcode full --path "your/project" --enable-llm
+
+# Configure AI model (optional, defaults to gpt-4o-mini)
+OPENAI_MODEL=gpt-4o-mini uv run python -m metazcode full --path "your/project" --enable-llm
+
+# Combine with database storage and custom output
+uv run python -m metazcode full --path "your/project" \
+  --enable-llm --output "ai_enhanced_analysis.json" \
+  --database memgraph
+```
+
 ## ❓ FAQ
 
-**Q: What SSIS files does it read?**  
-A: .dtsx packages, .conmgr connections, .params parameters, .dtproj projects
+**Q: What ETL files does it read?**  
+A: Currently supports SSIS: .dtsx packages, .conmgr connections, .params parameters, .dtproj projects
 
-**Q: Does it modify my SSIS files?**  
+**Q: Does it modify my ETL files?**  
 A: No! It only reads and analyzes - never changes your files
 
 **Q: How long does analysis take?**  
-A: Usually under 30 seconds for most projects
+A: Usually under 30 seconds for most projects, plus 1-2 minutes for AI enrichment
 
 **Q: What if I have connection errors in my packages?**  
 A: No problem! The tool analyzes file structure, not live connections
+
+**Q: Do I need an OpenAI API key?**  
+A: Only for AI enrichment features. Standard analysis works without any API keys
+
+**Q: Is my data sent to AI services?**  
+A: Only metadata (table names, operation names, SQL) - never actual data content
 
 **Q: Can I use this for other ETL tools?**  
 A: Currently SSIS only, but the architecture supports other platforms
@@ -162,10 +222,11 @@ uv sync
 
 After running your analysis:
 
-1. **Review the JSON output** - Contains complete metadata about your SSIS environment
-2. **Check execution order** - Use for migration planning and optimization  
-3. **Identify risks** - Address bottlenecks before they cause problems
-4. **Share insights** - Use for team discussions and documentation
+1. **Review the JSON output** - Contains complete metadata about your ETL environment
+2. **Read AI business summaries** - Understand what each operation accomplishes (with LLM)
+3. **Check execution order** - Use for migration planning and optimization  
+4. **Identify risks** - Address bottlenecks before they cause problems
+5. **Share insights** - Use AI-enhanced documentation for team discussions
 
 ## 🤝 Contributing
 
@@ -173,4 +234,4 @@ MZCode is designed for extensibility. We welcome contributions that help organiz
 
 ---
 
-**Transform your SSIS environment from mystery to mastery!** 🎯
+**Transform your ETL environment from mystery to mastery with AI-powered insights!** 🎯

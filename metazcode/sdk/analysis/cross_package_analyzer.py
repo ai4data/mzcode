@@ -133,7 +133,8 @@ class CrossPackageAnalyzer:
             all_nodes = self.graph_client.get_all_nodes()
             for node in all_nodes:
                 node_dict = node.to_dict()
-                graph.add_node(node_dict['node_id'], **node_dict)
+                node_id = node_dict.get('id', node_dict.get('node_id'))
+                graph.add_node(node_id, **node_dict)
             
             # Get all edges via Cypher query
             connection = self.graph_client.get_graph()
