@@ -340,7 +340,8 @@ class CanonicalInformaticaParser:
         edges = []
         
         task_name = task_instance.get("NAME", "UnknownTask")
-        task_type = task_instance.get("TYPE", "UnknownType")
+        # Use TASKTYPE attribute for workflow task instances
+        task_type = task_instance.get("TASKTYPE") or task_instance.get("TYPE", "UnknownType")
         task_id = f"{workflow_id}:task:{task_name}"
         
         source_context = SourceContext.create_node_traceability(
@@ -827,7 +828,11 @@ class CanonicalInformaticaParser:
             "sequence generator": self._parse_sequence_generator_transformation,
             "update strategy": self._parse_update_strategy_transformation,
             "normalizer": self._parse_normalizer_transformation,
-            "rank": self._parse_rank_transformation
+            "rank": self._parse_rank_transformation,
+            # Additional transformation types found in real-world XML
+            "custom transformation": self._parse_generic_transformation,
+            "lookup procedure": self._parse_lookup_transformation,
+            "sequence": self._parse_sequence_generator_transformation
         }
         
         parser_method = parser_map.get(transformation_type)
@@ -906,7 +911,8 @@ class CanonicalInformaticaParser:
                     logger.debug(f"Created WRITES_TO edge: {from_node.node_id} -> {target_data_asset_id} "
                                 f"({from_field} -> {to_field})")
                 else:
-                    logger.warning(f"Source node not found for WRITES_TO: {from_instance}")
+                    logger.debug(f"Source node not found for WRITES_TO: {from_instance}. "
+                               f"Available nodes: {list(instance_nodes.keys())[:5]}...")
             
             # Handle Source Definition to Source Qualifier flow  
             elif from_instancetype == "Source Definition" and to_instancetype == "Source Qualifier":
@@ -976,7 +982,8 @@ class CanonicalInformaticaParser:
                     logger.debug(f"Created {edge_type.value} edge: {from_node.node_id} -> {to_node.node_id} "
                                 f"({from_field} -> {to_field})")
                 else:
-                    logger.warning(f"Missing nodes for connector: {from_instance} -> {to_instance}")
+                    logger.debug(f"Missing nodes for connector: {from_instance} -> {to_instance}. "
+                               f"Available: {list(instance_nodes.keys())[:3]}...")
         else:
             logger.warning(f"Incomplete connector: FROMINSTANCE='{from_instance}' "
                           f"TOINSTANCE='{to_instance}'")
