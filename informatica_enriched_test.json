@@ -1,0 +1,33 @@
+{
+  "packages_analyzed": 2,
+  "shared_resources": {
+    "tables": 0,
+    "connections": 0,
+    "parameters": 0
+  },
+  "data_dependencies": 0,
+  "execution_chains": 1,
+  "cross_package_edges_added": 0,
+  "contention_risks": {
+    "high_risk_connections": [],
+    "high_contention_tables": [],
+    "risk_summary": {
+      "total_shared_connections": 0,
+      "high_risk_connections": 0,
+      "total_shared_tables": 0,
+      "high_contention_tables": 0
+    }
+  },
+  "detailed_analysis": {
+    "shared_tables": {},
+    "shared_connections": {},
+    "shared_parameters": {},
+    "data_dependencies": [],
+    "execution_order": [
+      [
+        "workflow:wf_m_q1",
+        "mapping:m_q1"
+      ]
+    ]
+  }
+}
