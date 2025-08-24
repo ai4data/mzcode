@@ -288,10 +288,42 @@ class CanonicalInformaticaParser:
             link_edges = self._parse_workflow_link(link, workflow_id, file_path)
             edges.extend(link_edges)
         
-        # Parse sessions for connection information
+        # Parse sessions for connection information AND create EXECUTES edges to mappings
         sessions = workflow.xpath(".//SESSION")
         for session in sessions:
+            # Extract connection information for later use
             self._extract_session_connections(session, file_path)
+            
+            # Create EXECUTES edges from session tasks to mappings
+            session_name = session.get("NAME", "")
+            mapping_name = session.get("MAPPINGNAME", "")
+            
+            if session_name and mapping_name:
+                # Find the corresponding task instance for this session
+                session_task_id = f"{workflow_id}:task:{session_name}"
+                mapping_pipeline_id = f"mapping:{mapping_name}"
+                
+                # Create EXECUTES edge from session task to mapping
+                executes_edge = Edge(
+                    source_id=session_task_id,
+                    target_id=mapping_pipeline_id,
+                    relation=EdgeType.DEPENDS_ON.value,  # Using DEPENDS_ON as closest semantic
+                    properties={
+                        "relationship": "session_executes_mapping",
+                        "mapping_name": mapping_name,
+                        "session_name": session_name,
+                        "derivation_method": "xml_metadata",
+                        "confidence_level": "high",
+                        "source_context": SourceContext.create_node_traceability(
+                            source_file_path=file_path,
+                            source_file_type="xml", 
+                            xml_path=f"//SESSION[@NAME='{session_name}'][@MAPPINGNAME='{mapping_name}']",
+                            technology="Informatica"
+                        )
+                    }
+                )
+                edges.append(executes_edge)
+                logger.info(f"Created EXECUTES edge: {session_task_id} -> {mapping_pipeline_id}")
         
         return nodes, edges
 
@@ -744,6 +776,16 @@ class CanonicalInformaticaParser:
             instance, mapping_id, file_path, transformation_def, session_context
         )
 
+    def _get_effective_instance_name(self, instance: etree._Element) -> str:
+        """
+        Get effective instance name, using fallbacks for empty values.
+        This handles both INSTANCENAME and NAME attributes and provides fallbacks.
+        """
+        # Check both INSTANCENAME and NAME attributes (Informatica uses both)
+        instance_name = instance.get("INSTANCENAME", "") or instance.get("NAME", "")
+        transformation_name = instance.get("TRANSFORMATIONNAME", "") or instance.get("TRANSFORMATION_NAME", "")
+        return instance_name or transformation_name or "UnknownInstance"
+    
     def _dispatch_transformation_parser(
         self,
         instance: etree._Element,
@@ -755,13 +797,25 @@ class CanonicalInformaticaParser:
         """
         Dispatch to the appropriate transformation parser based on transformation type.
         This follows the same pattern as the SSIS parser's component dispatcher.
-        """
-        transformation_type = transformation_def.get("type", "").lower()
         
-        # Map transformation types to parser methods
+        CRITICAL: Use TRANSFORMATION_TYPE from the INSTANCE XML tag, not transformation_def.
+        This is the key to proper Informatica parsing.
+        """
+        # FIXED: Read TRANSFORMATION_TYPE directly from the instance XML element
+        transformation_type = instance.get("TRANSFORMATION_TYPE", "").lower()
+        
+        # Handle both variants (TRANSFORMATION_TYPE vs TRANSFORMATIONTYPE)
+        if not transformation_type:
+            transformation_type = instance.get("TRANSFORMATIONTYPE", "").lower()
+        
+        logger.debug(f"Dispatching transformation instance: {instance.get('INSTANCENAME', 'Unknown')} "
+                    f"with type: '{transformation_type}'")
+        
+        # Map transformation types to parser methods - using exact XML values
         parser_map = {
             "source qualifier": self._parse_source_qualifier_transformation,
             "target definition": self._parse_target_transformation,
+            "source definition": self._parse_source_definition_transformation,
             "expression": self._parse_expression_transformation,
             "filter": self._parse_filter_transformation,
             "aggregator": self._parse_aggregator_transformation,
@@ -780,6 +834,8 @@ class CanonicalInformaticaParser:
         if parser_method:
             return parser_method(instance, mapping_id, file_path, transformation_def, session_context)
         else:
+            logger.warning(f"No specific parser for transformation type '{transformation_type}', "
+                          f"using generic parser")
             # Generic transformation parser for unknown types
             return self._parse_generic_transformation(
                 instance, mapping_id, file_path, transformation_def, session_context
@@ -794,6 +850,11 @@ class CanonicalInformaticaParser:
     ) -> List[Edge]:
         """
         Parse connectors that define data flow between transformation instances.
+        
+        CRITICAL: This implements the complete data lineage including:
+        1. WRITES_TO edges for Target Definition instances
+        2. Column-level lineage via FROMFIELD/TOFIELD
+        3. Proper handling of Source Definition to Source Qualifier flows
         """
         edges = []
         
@@ -802,22 +863,24 @@ class CanonicalInformaticaParser:
         from_instancetype = connector.get("FROMINSTANCETYPE", "")
         to_instancetype = connector.get("TOINSTANCETYPE", "")
         
+        # Extract column-level lineage
+        from_field = connector.get("FROMFIELD", "")
+        to_field = connector.get("TOFIELD", "")
+        
         if from_instance and to_instance:
-            from_node = instance_nodes.get(from_instance)
-            to_node = instance_nodes.get(to_instance)
+            source_context = SourceContext.create_node_traceability(
+                source_file_path=file_path,
+                line_number=connector.sourceline or 0,
+                source_file_type="xml",
+                xml_path=f"//CONNECTOR[@FROMINSTANCE='{from_instance}'][@TOINSTANCE='{to_instance}']",
+                technology="Informatica"
+            )
             
-            if from_node and to_node:
-                source_context = SourceContext.create_node_traceability(
-                    source_file_path=file_path,
-                    line_number=connector.sourceline or 0,
-                    source_file_type="xml",
-                    xml_path=f"//CONNECTOR[@FROMINSTANCE='{from_instance}'][@TOINSTANCE='{to_instance}']"
-                    ,
-            technology="Informatica"
-        )
-                
-                # Handle target definitions specially to write to DATA_ASSET nodes
-                if to_instancetype == "Target Definition":
+            # CRITICAL: Handle Target Definition instances - create WRITES_TO to DATA_ASSET
+            if to_instancetype == "Target Definition":
+                # Find the source operation node
+                from_node = instance_nodes.get(from_instance)
+                if from_node:
                     # Create WRITES_TO edge to the actual DATA_ASSET node for the target
                     target_data_asset_id = f"data_asset:target:{to_instance}"
                     
@@ -827,21 +890,69 @@ class CanonicalInformaticaParser:
                         relation=EdgeType.WRITES_TO.value,
                         properties={
                             "connector_type": "data_flow",
+                            "from_instance": from_instance,
+                            "to_instance": to_instance,
                             "from_instance_type": from_instancetype,
                             "to_instance_type": to_instancetype,
-                            "target_instance_name": to_instance,
+                            "from_field": from_field,
+                            "to_field": to_field,
+                            "column_lineage": f"{from_field} -> {to_field}" if from_field and to_field else "",
+                            "derivation_method": "xml_metadata",
+                            "confidence_level": "high",
                             "source_context": source_context
                         }
                     )
                     edges.append(connector_edge)
+                    logger.debug(f"Created WRITES_TO edge: {from_node.node_id} -> {target_data_asset_id} "
+                                f"({from_field} -> {to_field})")
                 else:
+                    logger.warning(f"Source node not found for WRITES_TO: {from_instance}")
+            
+            # Handle Source Definition to Source Qualifier flow  
+            elif from_instancetype == "Source Definition" and to_instancetype == "Source Qualifier":
+                # This is handled by the Source Qualifier's ASSOCIATED_SOURCE_INSTANCE logic
+                # We create a data flow edge between them but the READS_FROM edge to DATA_ASSET
+                # is created by the Source Qualifier parser
+                from_node = instance_nodes.get(from_instance) 
+                to_node = instance_nodes.get(to_instance)
+                
+                if from_node and to_node:
+                    connector_edge = Edge(
+                        source_id=from_node.node_id,
+                        target_id=to_node.node_id,
+                        relation=EdgeType.DEPENDS_ON.value,
+                        properties={
+                            "connector_type": "data_flow",
+                            "from_instance": from_instance,
+                            "to_instance": to_instance,
+                            "from_instance_type": from_instancetype,
+                            "to_instance_type": to_instancetype,
+                            "from_field": from_field,
+                            "to_field": to_field,
+                            "column_lineage": f"{from_field} -> {to_field}" if from_field and to_field else "",
+                            "source_context": source_context
+                        }
+                    )
+                    # Note: We don't add this edge as it would be redundant with the READS_FROM 
+                    # edge created by the Source Qualifier
+                    logger.debug(f"Skipping Source Definition -> Source Qualifier edge "
+                                f"(handled by READS_FROM): {from_instance} -> {to_instance}")
+            
+            # Handle transformation-to-transformation data flow
+            else:
+                from_node = instance_nodes.get(from_instance)
+                to_node = instance_nodes.get(to_instance)
+                
+                if from_node and to_node:
                     # Determine edge type based on instance types
-                    if from_instancetype == "SOURCE" or from_instancetype.startswith("Source"):
-                        edge_type = EdgeType.READS_FROM
-                    elif to_instancetype == "TARGET" or to_instancetype.startswith("Target"):
+                    if from_instancetype.startswith("Source") and to_instancetype == "Source Qualifier":
+                        edge_type = EdgeType.DEPENDS_ON  # Data flow
+                    elif to_instancetype.startswith("Target"):
                         edge_type = EdgeType.WRITES_TO
+                    elif from_instancetype.startswith("Source"):
+                        edge_type = EdgeType.READS_FROM
                     else:
-                        edge_type = EdgeType.DEPENDS_ON
+                        edge_type = EdgeType.DEPENDS_ON  # Transformation data flow
                     
                     connector_edge = Edge(
                         source_id=from_node.node_id,
@@ -849,12 +960,26 @@ class CanonicalInformaticaParser:
                         relation=edge_type.value,
                         properties={
                             "connector_type": "data_flow",
+                            "from_instance": from_instance,
+                            "to_instance": to_instance,
                             "from_instance_type": from_instancetype,
                             "to_instance_type": to_instancetype,
+                            "from_field": from_field,
+                            "to_field": to_field,
+                            "column_lineage": f"{from_field} -> {to_field}" if from_field and to_field else "",
+                            "derivation_method": "xml_metadata",
+                            "confidence_level": "high",
                             "source_context": source_context
                         }
                     )
                     edges.append(connector_edge)
+                    logger.debug(f"Created {edge_type.value} edge: {from_node.node_id} -> {to_node.node_id} "
+                                f"({from_field} -> {to_field})")
+                else:
+                    logger.warning(f"Missing nodes for connector: {from_instance} -> {to_instance}")
+        else:
+            logger.warning(f"Incomplete connector: FROMINSTANCE='{from_instance}' "
+                          f"TOINSTANCE='{to_instance}'")
         
         return edges
 
@@ -868,12 +993,17 @@ class CanonicalInformaticaParser:
         transformation_def: Dict[str, Any],
         session_context: Dict[str, Any]
     ) -> Tuple[List[Node], List[Edge]]:
-        """Parse Source Qualifier transformation instance."""
+        """
+        Parse Source Qualifier transformation instance.
+        
+        CRITICAL: This is where we implement the READS_FROM lineage by extracting
+        the ASSOCIATED_SOURCE_INSTANCE from the instance XML tag.
+        """
         nodes = []
         edges = []
         
-        instance_name = instance.get("INSTANCENAME", "")
-        transformation_name = instance.get("TRANSFORMATIONNAME", "")
+        instance_name = instance.get("INSTANCENAME", "") or instance.get("NAME", "")
+        transformation_name = instance.get("TRANSFORMATIONNAME", "") or instance.get("TRANSFORMATION_NAME", "")
         instance_id = f"{mapping_id}:source_qualifier:{instance_name}"
         
         source_context = SourceContext.create_node_traceability(
@@ -885,23 +1015,25 @@ class CanonicalInformaticaParser:
             technology="Informatica"
         )
         
-        # Get transformation definition for more details
+        # CRITICAL FIX: Extract associated source from INSTANCE XML tag, not transformation definition
+        associated_source = ""
+        associated_source_elements = instance.xpath(".//ASSOCIATED_SOURCE_INSTANCE")
+        if associated_source_elements:
+            associated_source = associated_source_elements[0].get("NAME", "")
+            logger.info(f"Found ASSOCIATED_SOURCE_INSTANCE: {associated_source} "
+                       f"for Source Qualifier: {instance_name}")
+        
+        # Get transformation definition for SQL query and other attributes
         transformation_element = transformation_def.get("element")
         sql_query = ""
-        associated_source = ""
         
         if transformation_element is not None:
-            # Extract SQL query from transformation
+            # Extract SQL query from transformation definition
             table_attributes = transformation_element.xpath(".//TABLEATTRIBUTE")
             for attr in table_attributes:
                 if attr.get("NAME") == "Sql Query":
                     sql_query = attr.get("VALUE", "")
                     break
-            
-            # Find associated source instance
-            associated_source_elements = transformation_element.xpath(".//ASSOCIATED_SOURCE_INSTANCE")
-            if associated_source_elements:
-                associated_source = associated_source_elements[0].text or ""
         
         # Parse SQL semantics using the enhanced SQL parser
         sql_semantics = self.sql_parser.parse_sql_semantics(sql_query)
@@ -933,7 +1065,7 @@ class CanonicalInformaticaParser:
         )
         edges.append(containment_edge)
         
-        # If associated with a source, create READS_FROM edge
+        # CRITICAL: Create READS_FROM edge to the DATA_ASSET source node
         if associated_source:
             # Reference the actual DATA_ASSET node created for this source
             source_data_asset_id = f"data_asset:source:{associated_source}"
@@ -943,12 +1075,36 @@ class CanonicalInformaticaParser:
                 relation=EdgeType.READS_FROM.value,
                 properties={
                     "relationship": "source_qualifier_reads_from_source",
+                    "associated_source_instance": associated_source,
+                    "derivation_method": "xml_metadata",
+                    "confidence_level": "high",
                     "source_context": source_context
                 }
             )
             edges.append(reads_from_edge)
+            logger.info(f"Created READS_FROM edge: {instance_id} -> {source_data_asset_id}")
+        else:
+            logger.warning(f"No ASSOCIATED_SOURCE_INSTANCE found for Source Qualifier: {instance_name}")
         
         return nodes, edges
+
+    def _parse_source_definition_transformation(
+        self,
+        instance: etree._Element,
+        mapping_id: str,
+        file_path: str,
+        transformation_def: Dict[str, Any],
+        session_context: Dict[str, Any]
+    ) -> Tuple[List[Node], List[Edge]]:
+        """
+        Parse Source Definition instance.
+        
+        Source Definition instances don't create operation nodes - they are represented
+        as DATA_ASSET nodes created in _parse_source_definitions. This is a passthrough.
+        """
+        # Source definitions are already handled as DATA_ASSET nodes
+        # No additional operation nodes needed for source definition instances
+        return [], []
 
     def _parse_target_transformation(
         self,
@@ -1303,26 +1459,25 @@ class CanonicalInformaticaParser:
         nodes = []
         edges = []
         
-        instance_name = instance.get("INSTANCENAME", "")
-        transformation_name = instance.get("TRANSFORMATIONNAME", "")
+        effective_name = self._get_effective_instance_name(instance)
+        transformation_name = instance.get("TRANSFORMATIONNAME", "") or instance.get("TRANSFORMATION_NAME", "")
         transformation_type = transformation_def.get("type", "Unknown")
-        instance_id = f"{mapping_id}:transformation:{instance_name}"
+        instance_id = f"{mapping_id}:transformation:{effective_name}"
         
         source_context = SourceContext.create_node_traceability(
             source_file_path=file_path,
             line_number=instance.sourceline or 0,
             source_file_type="xml",
-            xml_path=f"//INSTANCE[@INSTANCENAME='{instance_name}']"
-            ,
+            xml_path=f"//INSTANCE[@INSTANCENAME='{effective_name}']",
             technology="Informatica"
         )
         
         node = Node(
             node_id=instance_id,
             node_type=NodeType.OPERATION.value,
-            name=instance_name,
+            name=effective_name,
             properties={
-                "name": instance_name,
+                "name": effective_name,
                 "transformation_name": transformation_name,
                 "transformation_type": transformation_type,
                 "operation_subtype": self._categorize_operation_subtype(transformation_type),
