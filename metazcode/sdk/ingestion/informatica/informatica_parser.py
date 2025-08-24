@@ -254,6 +254,8 @@ class CanonicalInformaticaParser:
             source_file_type="xml",
             xml_path=f"//WORKFLOW[@NAME='{workflow_name}']",
             line_number=workflow.sourceline
+            ,
+            technology="Informatica"
         )
         
         workflow_node = Node(
@@ -314,6 +316,8 @@ class CanonicalInformaticaParser:
             source_file_type="xml",
             xml_path=f"//TASKINSTANCE[@NAME='{task_name}']",
             line_number=task_instance.sourceline
+            ,
+            technology="Informatica"
         )
         
         # Determine node type based on task type
@@ -372,7 +376,9 @@ class CanonicalInformaticaParser:
                 source_file_type="xml",
                 xml_path=f"//WORKFLOWLINK[@FROMTASK='{from_task}'][@TOTASK='{to_task}']",
                 line_number=link.sourceline
-            )
+                ,
+            technology="Informatica"
+        )
             
             link_edge = Edge(
                 source_id=from_id,
@@ -462,7 +468,9 @@ class CanonicalInformaticaParser:
                     source_file_type="xml",
                     xml_path=f"//SOURCE[@NAME='{source_name}']",
                     line_number=source.sourceline
-                )
+                    ,
+            technology="Informatica"
+        )
                 
                 # Parse field information
                 fields = self._parse_source_fields(source)
@@ -504,7 +512,9 @@ class CanonicalInformaticaParser:
                     source_file_type="xml",
                     xml_path=f"//TARGET[@NAME='{target_name}']",
                     line_number=target.sourceline
-                )
+                    ,
+            technology="Informatica"
+        )
                 
                 # Parse field information
                 fields = self._parse_target_fields(target)
@@ -654,6 +664,8 @@ class CanonicalInformaticaParser:
             source_file_type="xml",
             xml_path=f"//MAPPING[@NAME='{mapping_name}']",
             line_number=mapping.sourceline
+            ,
+            technology="Informatica"
         )
         
         mapping_node = Node(
@@ -800,7 +812,9 @@ class CanonicalInformaticaParser:
                     line_number=connector.sourceline or 0,
                     source_file_type="xml",
                     xml_path=f"//CONNECTOR[@FROMINSTANCE='{from_instance}'][@TOINSTANCE='{to_instance}']"
-                )
+                    ,
+            technology="Informatica"
+        )
                 
                 # Handle target definitions specially to write to DATA_ASSET nodes
                 if to_instancetype == "Target Definition":
@@ -867,6 +881,8 @@ class CanonicalInformaticaParser:
             line_number=instance.sourceline or 0,
             source_file_type="xml",
             xml_path=f"//INSTANCE[@INSTANCENAME='{instance_name}']"
+            ,
+            technology="Informatica"
         )
         
         # Get transformation definition for more details
@@ -970,6 +986,8 @@ class CanonicalInformaticaParser:
             line_number=instance.sourceline or 0,
             source_file_type="xml",
             xml_path=f"//INSTANCE[@INSTANCENAME='{instance_name}']"
+            ,
+            technology="Informatica"
         )
         
         # Extract expressions and lookups from transformation definition
@@ -1057,6 +1075,8 @@ class CanonicalInformaticaParser:
             line_number=instance.sourceline or 0,
             source_file_type="xml",
             xml_path=f"//INSTANCE[@INSTANCENAME='{instance_name}']"
+            ,
+            technology="Informatica"
         )
         
         # Extract join information from transformation definition
@@ -1137,6 +1157,8 @@ class CanonicalInformaticaParser:
             line_number=instance.sourceline or 0,
             source_file_type="xml",
             xml_path=f"//INSTANCE[@INSTANCENAME='{instance_name}']"
+            ,
+            technology="Informatica"
         )
         
         # Extract router groups and conditions
@@ -1210,6 +1232,8 @@ class CanonicalInformaticaParser:
             line_number=instance.sourceline or 0,
             source_file_type="xml",
             xml_path=f"//INSTANCE[@INSTANCENAME='{instance_name}']"
+            ,
+            technology="Informatica"
         )
         
         # Extract lookup properties
@@ -1289,6 +1313,8 @@ class CanonicalInformaticaParser:
             line_number=instance.sourceline or 0,
             source_file_type="xml",
             xml_path=f"//INSTANCE[@INSTANCENAME='{instance_name}']"
+            ,
+            technology="Informatica"
         )
         
         node = Node(
@@ -1341,6 +1367,8 @@ class CanonicalInformaticaParser:
             line_number=instance.sourceline or 0,
             source_file_type="xml",
             xml_path=f"//INSTANCE[@INSTANCENAME='{instance_name}']"
+            ,
+            technology="Informatica"
         )
         
         # Extract filter condition from transformation definition
@@ -1401,6 +1429,8 @@ class CanonicalInformaticaParser:
             line_number=instance.sourceline or 0,
             source_file_type="xml",
             xml_path=f"//INSTANCE[@INSTANCENAME='{instance_name}']"
+            ,
+            technology="Informatica"
         )
         
         # Extract aggregation functions and group by fields
@@ -1473,6 +1503,8 @@ class CanonicalInformaticaParser:
             line_number=instance.sourceline or 0,
             source_file_type="xml",
             xml_path=f"//INSTANCE[@INSTANCENAME='{instance_name}']"
+            ,
+            technology="Informatica"
         )
         
         # Extract sorting properties from transformation definition
@@ -1558,6 +1590,8 @@ class CanonicalInformaticaParser:
             line_number=instance.sourceline or 0,
             source_file_type="xml",
             xml_path=f"//INSTANCE[@INSTANCENAME='{instance_name}']"
+            ,
+            technology="Informatica"
         )
         
         # Extract union properties from transformation definition
@@ -1636,6 +1670,8 @@ class CanonicalInformaticaParser:
             line_number=instance.sourceline or 0,
             source_file_type="xml",
             xml_path=f"//INSTANCE[@INSTANCENAME='{instance_name}']"
+            ,
+            technology="Informatica"
         )
         
         # Extract sequence generator properties
@@ -1710,6 +1746,8 @@ class CanonicalInformaticaParser:
             line_number=instance.sourceline or 0,
             source_file_type="xml",
             xml_path=f"//INSTANCE[@INSTANCENAME='{instance_name}']"
+            ,
+            technology="Informatica"
         )
         
         # Extract update strategy properties from transformation definition
@@ -1781,6 +1819,8 @@ class CanonicalInformaticaParser:
             line_number=instance.sourceline or 0,
             source_file_type="xml",
             xml_path=f"//INSTANCE[@INSTANCENAME='{instance_name}']"
+            ,
+            technology="Informatica"
         )
         
         # Extract normalizer properties from transformation definition
@@ -1863,6 +1903,8 @@ class CanonicalInformaticaParser:
             line_number=instance.sourceline or 0,
             source_file_type="xml",
             xml_path=f"//INSTANCE[@INSTANCENAME='{instance_name}']"
+            ,
+            technology="Informatica"
         )
         
         # Extract ranking properties
