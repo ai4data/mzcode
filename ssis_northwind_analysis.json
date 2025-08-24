@@ -1,0 +1,500 @@
+{
+  "packages_analyzed": 18,
+  "shared_resources": {
+    "tables": 12,
+    "connections": 0,
+    "parameters": 0
+  },
+  "data_dependencies": 10,
+  "execution_chains": 2,
+  "cross_package_edges_added": 10,
+  "contention_risks": {
+    "high_risk_connections": [],
+    "high_contention_tables": [
+      {
+        "table": "dbo].[customer_dim",
+        "package_count": 5,
+        "packages": [
+          "pipeline:Ship_Info.dtsx",
+          "pipeline:Customer.dtsx",
+          "pipeline:northwind.dtsx",
+          "pipeline:ShioInfo.dtsx",
+          "pipeline:Package4.dtsx"
+        ]
+      }
+    ],
+    "risk_summary": {
+      "total_shared_connections": 0,
+      "high_risk_connections": 0,
+      "total_shared_tables": 12,
+      "high_contention_tables": 1
+    }
+  },
+  "detailed_analysis": {
+    "shared_tables": {
+      "table:dbo].[customer_dim": {
+        "table_name": "dbo].[customer_dim",
+        "packages": [
+          "pipeline:Ship_Info.dtsx",
+          "pipeline:Customer.dtsx",
+          "pipeline:northwind.dtsx",
+          "pipeline:ShioInfo.dtsx",
+          "pipeline:Package4.dtsx"
+        ],
+        "readers": [
+          "pipeline:ShioInfo.dtsx:operation:Data Flow Task_ship info",
+          "pipeline:Package4.dtsx:operation:Data Flow Task_ship info",
+          "pipeline:Ship_Info.dtsx:operation:Data Flow Task_ship info",
+          "pipeline:northwind.dtsx:operation:Data Flow Task_ship info"
+        ],
+        "writers": [
+          "pipeline:Customer.dtsx:operation:Data Flow Task_ Customer",
+          "pipeline:northwind.dtsx:operation:Data Flow Task_ Customer",
+          "pipeline:ShioInfo.dtsx:operation:Data Flow Task_ Customer"
+        ],
+        "is_integration_point": true,
+        "package_count": 5,
+        "properties": {
+          "technology": "SSIS",
+          "table_name": "dbo].[customer_dim",
+          "source_file_path": "/mnt/c/Users/Hicham/OneDrive/python/projects/mzcode/data/ssis/ssis_northwind/SSIS/obj/Development/Ship_Info.dtsx",
+          "source_file_type": "dtsx",
+          "xml_path": "//DataFlowComponent[contains(@name, 'dbo].[customer_dim')]",
+          "parent_package": "Ship_Info",
+          "supported_platforms": [
+            "sql_server",
+            "postgresql"
+          ],
+          "type_mapping_enabled": true
+        }
+      },
+      "table:dbo].[Customers": {
+        "table_name": "dbo].[Customers",
+        "packages": [
+          "pipeline:northwind.dtsx",
+          "pipeline:ShioInfo.dtsx",
+          "pipeline:Customer.dtsx"
+        ],
+        "readers": [
+          "pipeline:Customer.dtsx:operation:Data Flow Task_ Customer",
+          "pipeline:northwind.dtsx:operation:Data Flow Task_ Customer",
+          "pipeline:ShioInfo.dtsx:operation:Data Flow Task_ Customer"
+        ],
+        "writers": [],
+        "is_integration_point": false,
+        "package_count": 3,
+        "properties": {
+          "technology": "SSIS",
+          "table_name": "dbo].[Customers",
+          "source_file_path": "/mnt/c/Users/Hicham/OneDrive/python/projects/mzcode/data/ssis/ssis_northwind/SSIS/obj/Development/ShioInfo.dtsx",
+          "source_file_type": "dtsx",
+          "xml_path": "//DataFlowComponent[contains(@name, 'dbo].[Customers')]",
+          "parent_package": "ShioInfo",
+          "supported_platforms": [
+            "sql_server",
+            "postgresql"
+          ],
+          "type_mapping_enabled": true
+        }
+      },
+      "table:dbo].[employee_dim": {
+        "table_name": "dbo].[employee_dim",
+        "packages": [
+          "pipeline:northwind.dtsx",
+          "pipeline:Employee.dtsx",
+          "pipeline:Emp.dtsx",
+          "pipeline:Package.dtsx"
+        ],
+        "readers": [],
+        "writers": [
+          "pipeline:northwind.dtsx:operation:Data Flow Task_Employee",
+          "pipeline:Employee.dtsx:operation:Data Flow Task_Employee",
+          "pipeline:Package.dtsx:operation:Data Flow Task",
+          "pipeline:Emp.dtsx:operation:Data Flow Task_Employee"
+        ],
+        "is_integration_point": false,
+        "package_count": 4,
+        "properties": {
+          "technology": "SSIS",
+          "table_name": "dbo].[employee_dim",
+          "source_file_path": "/mnt/c/Users/Hicham/OneDrive/python/projects/mzcode/data/ssis/ssis_northwind/SSIS/obj/Development/Package.dtsx",
+          "source_file_type": "dtsx",
+          "xml_path": "//DataFlowComponent[contains(@name, 'dbo].[employee_dim')]",
+          "parent_package": "Package",
+          "supported_platforms": [
+            "sql_server",
+            "postgresql"
+          ],
+          "type_mapping_enabled": true
+        }
+      },
+      "table:dbo].[Employees": {
+        "table_name": "dbo].[Employees",
+        "packages": [
+          "pipeline:northwind.dtsx",
+          "pipeline:Employee.dtsx",
+          "pipeline:Emp.dtsx",
+          "pipeline:Package.dtsx"
+        ],
+        "readers": [
+          "pipeline:northwind.dtsx:operation:Data Flow Task_Employee",
+          "pipeline:Employee.dtsx:operation:Data Flow Task_Employee",
+          "pipeline:Package.dtsx:operation:Data Flow Task",
+          "pipeline:Emp.dtsx:operation:Data Flow Task_Employee"
+        ],
+        "writers": [],
+        "is_integration_point": false,
+        "package_count": 4,
+        "properties": {
+          "technology": "SSIS",
+          "table_name": "dbo].[Employees",
+          "source_file_path": "/mnt/c/Users/Hicham/OneDrive/python/projects/mzcode/data/ssis/ssis_northwind/SSIS/obj/Development/Package.dtsx",
+          "source_file_type": "dtsx",
+          "xml_path": "//DataFlowComponent[contains(@name, 'dbo].[Employees')]",
+          "parent_package": "Package",
+          "supported_platforms": [
+            "sql_server",
+            "postgresql"
+          ],
+          "type_mapping_enabled": true
+        }
+      },
+      "table:dbo].[orders_fact": {
+        "table_name": "dbo].[orders_fact",
+        "packages": [
+          "pipeline:Fact.dtsx",
+          "pipeline:Fact_orders.dtsx"
+        ],
+        "readers": [],
+        "writers": [
+          "pipeline:Fact.dtsx:operation:Data Flow Fact_Table",
+          "pipeline:Fact_orders.dtsx:operation:Data Flow Orders_Fact"
+        ],
+        "is_integration_point": false,
+        "package_count": 2,
+        "properties": {
+          "technology": "SSIS",
+          "table_name": "dbo].[orders_fact",
+          "source_file_path": "/mnt/c/Users/Hicham/OneDrive/python/projects/mzcode/data/ssis/ssis_northwind/SSIS/obj/Development/Fact_orders.dtsx",
+          "source_file_type": "dtsx",
+          "xml_path": "//DataFlowComponent[contains(@name, 'dbo].[orders_fact')]",
+          "parent_package": "Fact_orders",
+          "supported_platforms": [
+            "sql_server",
+            "postgresql"
+          ],
+          "type_mapping_enabled": true
+        }
+      },
+      "table:dbo].[product_dim": {
+        "table_name": "dbo].[product_dim",
+        "packages": [
+          "pipeline:Product.dtsx",
+          "pipeline:Package2.dtsx",
+          "pipeline:northwind.dtsx"
+        ],
+        "readers": [],
+        "writers": [
+          "pipeline:Package2.dtsx:operation:Data Flow Task",
+          "pipeline:Product.dtsx:operation:Data Flow Product",
+          "pipeline:northwind.dtsx:operation:Data Flow Product"
+        ],
+        "is_integration_point": false,
+        "package_count": 3,
+        "properties": {
+          "technology": "SSIS",
+          "table_name": "dbo].[product_dim",
+          "source_file_path": "/mnt/c/Users/Hicham/OneDrive/python/projects/mzcode/data/ssis/ssis_northwind/SSIS/obj/Development/Product.dtsx",
+          "source_file_type": "dtsx",
+          "xml_path": "//DataFlowComponent[contains(@name, 'dbo].[product_dim')]",
+          "parent_package": "Product",
+          "supported_platforms": [
+            "sql_server",
+            "postgresql"
+          ],
+          "type_mapping_enabled": true
+        }
+      },
+      "table:dbo].[shipper_dim": {
+        "table_name": "dbo].[shipper_dim",
+        "packages": [
+          "pipeline:northwind.dtsx",
+          "pipeline:Shippers.dtsx",
+          "pipeline:Package3.dtsx"
+        ],
+        "readers": [],
+        "writers": [
+          "pipeline:northwind.dtsx:operation:Data Flow Task_Shippers",
+          "pipeline:Package3.dtsx:operation:Data Flow Task_Shippers",
+          "pipeline:Shippers.dtsx:operation:Data Flow Task_Shippers"
+        ],
+        "is_integration_point": false,
+        "package_count": 3,
+        "properties": {
+          "technology": "SSIS",
+          "table_name": "dbo].[shipper_dim",
+          "source_file_path": "/mnt/c/Users/Hicham/OneDrive/python/projects/mzcode/data/ssis/ssis_northwind/SSIS/obj/Development/Shippers.dtsx",
+          "source_file_type": "dtsx",
+          "xml_path": "//DataFlowComponent[contains(@name, 'dbo].[shipper_dim')]",
+          "parent_package": "Shippers",
+          "supported_platforms": [
+            "sql_server",
+            "postgresql"
+          ],
+          "type_mapping_enabled": true
+        }
+      },
+      "table:dbo].[Shippers": {
+        "table_name": "dbo].[Shippers",
+        "packages": [
+          "pipeline:northwind.dtsx",
+          "pipeline:Shippers.dtsx",
+          "pipeline:Package3.dtsx"
+        ],
+        "readers": [
+          "pipeline:northwind.dtsx:operation:Data Flow Task_Shippers",
+          "pipeline:Package3.dtsx:operation:Data Flow Task_Shippers",
+          "pipeline:Shippers.dtsx:operation:Data Flow Task_Shippers"
+        ],
+        "writers": [],
+        "is_integration_point": false,
+        "package_count": 3,
+        "properties": {
+          "technology": "SSIS",
+          "table_name": "dbo].[Shippers",
+          "source_file_path": "/mnt/c/Users/Hicham/OneDrive/python/projects/mzcode/data/ssis/ssis_northwind/SSIS/obj/Development/Shippers.dtsx",
+          "source_file_type": "dtsx",
+          "xml_path": "//DataFlowComponent[contains(@name, 'dbo].[Shippers')]",
+          "parent_package": "Shippers",
+          "supported_platforms": [
+            "sql_server",
+            "postgresql"
+          ],
+          "type_mapping_enabled": true
+        }
+      },
+      "table:dbo].[ship_info": {
+        "table_name": "dbo].[ship_info",
+        "packages": [
+          "pipeline:Ship_Info.dtsx",
+          "pipeline:northwind.dtsx",
+          "pipeline:ShioInfo.dtsx",
+          "pipeline:Package4.dtsx",
+          "pipeline:Package5.dtsx"
+        ],
+        "readers": [],
+        "writers": [
+          "pipeline:Package5.dtsx:operation:Data Flow Task_ship info",
+          "pipeline:ShioInfo.dtsx:operation:Data Flow Task_ship info",
+          "pipeline:northwind.dtsx:operation:Data Flow Task_ship info",
+          "pipeline:Ship_Info.dtsx:operation:Data Flow Task_ship info",
+          "pipeline:Package4.dtsx:operation:Data Flow Task_ship info"
+        ],
+        "is_integration_point": false,
+        "package_count": 5,
+        "properties": {
+          "technology": "SSIS",
+          "table_name": "dbo].[ship_info",
+          "source_file_path": "/mnt/c/Users/Hicham/OneDrive/python/projects/mzcode/data/ssis/ssis_northwind/SSIS/obj/Development/Ship_Info.dtsx",
+          "source_file_type": "dtsx",
+          "xml_path": "//DataFlowComponent[contains(@name, 'dbo].[ship_info')]",
+          "parent_package": "Ship_Info",
+          "supported_platforms": [
+            "sql_server",
+            "postgresql"
+          ],
+          "type_mapping_enabled": true
+        }
+      },
+      "table:dbo].[supplier_dim": {
+        "table_name": "dbo].[supplier_dim",
+        "packages": [
+          "pipeline:northwind.dtsx",
+          "pipeline:Suppliers.dtsx"
+        ],
+        "readers": [],
+        "writers": [
+          "pipeline:Suppliers.dtsx:operation:Data Flow Task_Supplier",
+          "pipeline:northwind.dtsx:operation:Data Flow Task_Supplier"
+        ],
+        "is_integration_point": false,
+        "package_count": 2,
+        "properties": {
+          "technology": "SSIS",
+          "table_name": "dbo].[supplier_dim",
+          "source_file_path": "/mnt/c/Users/Hicham/OneDrive/python/projects/mzcode/data/ssis/ssis_northwind/SSIS/obj/Development/Suppliers.dtsx",
+          "source_file_type": "dtsx",
+          "xml_path": "//DataFlowComponent[contains(@name, 'dbo].[supplier_dim')]",
+          "parent_package": "Suppliers",
+          "supported_platforms": [
+            "sql_server",
+            "postgresql"
+          ],
+          "type_mapping_enabled": true
+        }
+      },
+      "table:dbo].[Suppliers": {
+        "table_name": "dbo].[Suppliers",
+        "packages": [
+          "pipeline:northwind.dtsx",
+          "pipeline:Suppliers.dtsx"
+        ],
+        "readers": [
+          "pipeline:Suppliers.dtsx:operation:Data Flow Task_Supplier",
+          "pipeline:northwind.dtsx:operation:Data Flow Task_Supplier"
+        ],
+        "writers": [],
+        "is_integration_point": false,
+        "package_count": 2,
+        "properties": {
+          "technology": "SSIS",
+          "table_name": "dbo].[Suppliers",
+          "source_file_path": "/mnt/c/Users/Hicham/OneDrive/python/projects/mzcode/data/ssis/ssis_northwind/SSIS/obj/Development/Suppliers.dtsx",
+          "source_file_type": "dtsx",
+          "xml_path": "//DataFlowComponent[contains(@name, 'dbo].[Suppliers')]",
+          "parent_package": "Suppliers",
+          "supported_platforms": [
+            "sql_server",
+            "postgresql"
+          ],
+          "type_mapping_enabled": true
+        }
+      },
+      "table:dbo].[facttest": {
+        "table_name": "dbo].[facttest",
+        "packages": [
+          "pipeline:Package1.dtsx",
+          "pipeline:factFinal.dtsx"
+        ],
+        "readers": [],
+        "writers": [
+          "pipeline:Package1.dtsx:operation:Data Flow Task",
+          "pipeline:factFinal.dtsx:operation:Data Flow Task"
+        ],
+        "is_integration_point": false,
+        "package_count": 2,
+        "properties": {
+          "technology": "SSIS",
+          "table_name": "dbo].[facttest",
+          "source_file_path": "/mnt/c/Users/Hicham/OneDrive/python/projects/mzcode/data/ssis/ssis_northwind/SSIS/obj/Development/Package1.dtsx",
+          "source_file_type": "dtsx",
+          "xml_path": "//DataFlowComponent[contains(@name, 'dbo].[facttest')]",
+          "parent_package": "Package1",
+          "supported_platforms": [
+            "sql_server",
+            "postgresql"
+          ],
+          "type_mapping_enabled": true
+        }
+      }
+    },
+    "shared_connections": {},
+    "shared_parameters": {},
+    "data_dependencies": [
+      {
+        "source_package": "pipeline:northwind.dtsx",
+        "target_package": "pipeline:Ship_Info.dtsx",
+        "dependency_type": "data_flow",
+        "shared_resource": "table:dbo].[customer_dim",
+        "shared_resource_name": "dbo].[customer_dim",
+        "description": "pipeline:northwind.dtsx must complete before pipeline:Ship_Info.dtsx (via dbo].[customer_dim)"
+      },
+      {
+        "source_package": "pipeline:northwind.dtsx",
+        "target_package": "pipeline:ShioInfo.dtsx",
+        "dependency_type": "data_flow",
+        "shared_resource": "table:dbo].[customer_dim",
+        "shared_resource_name": "dbo].[customer_dim",
+        "description": "pipeline:northwind.dtsx must complete before pipeline:ShioInfo.dtsx (via dbo].[customer_dim)"
+      },
+      {
+        "source_package": "pipeline:northwind.dtsx",
+        "target_package": "pipeline:Package4.dtsx",
+        "dependency_type": "data_flow",
+        "shared_resource": "table:dbo].[customer_dim",
+        "shared_resource_name": "dbo].[customer_dim",
+        "description": "pipeline:northwind.dtsx must complete before pipeline:Package4.dtsx (via dbo].[customer_dim)"
+      },
+      {
+        "source_package": "pipeline:ShioInfo.dtsx",
+        "target_package": "pipeline:northwind.dtsx",
+        "dependency_type": "data_flow",
+        "shared_resource": "table:dbo].[customer_dim",
+        "shared_resource_name": "dbo].[customer_dim",
+        "description": "pipeline:ShioInfo.dtsx must complete before pipeline:northwind.dtsx (via dbo].[customer_dim)"
+      },
+      {
+        "source_package": "pipeline:ShioInfo.dtsx",
+        "target_package": "pipeline:Ship_Info.dtsx",
+        "dependency_type": "data_flow",
+        "shared_resource": "table:dbo].[customer_dim",
+        "shared_resource_name": "dbo].[customer_dim",
+        "description": "pipeline:ShioInfo.dtsx must complete before pipeline:Ship_Info.dtsx (via dbo].[customer_dim)"
+      },
+      {
+        "source_package": "pipeline:ShioInfo.dtsx",
+        "target_package": "pipeline:Package4.dtsx",
+        "dependency_type": "data_flow",
+        "shared_resource": "table:dbo].[customer_dim",
+        "shared_resource_name": "dbo].[customer_dim",
+        "description": "pipeline:ShioInfo.dtsx must complete before pipeline:Package4.dtsx (via dbo].[customer_dim)"
+      },
+      {
+        "source_package": "pipeline:Customer.dtsx",
+        "target_package": "pipeline:northwind.dtsx",
+        "dependency_type": "data_flow",
+        "shared_resource": "table:dbo].[customer_dim",
+        "shared_resource_name": "dbo].[customer_dim",
+        "description": "pipeline:Customer.dtsx must complete before pipeline:northwind.dtsx (via dbo].[customer_dim)"
+      },
+      {
+        "source_package": "pipeline:Customer.dtsx",
+        "target_package": "pipeline:Ship_Info.dtsx",
+        "dependency_type": "data_flow",
+        "shared_resource": "table:dbo].[customer_dim",
+        "shared_resource_name": "dbo].[customer_dim",
+        "description": "pipeline:Customer.dtsx must complete before pipeline:Ship_Info.dtsx (via dbo].[customer_dim)"
+      },
+      {
+        "source_package": "pipeline:Customer.dtsx",
+        "target_package": "pipeline:ShioInfo.dtsx",
+        "dependency_type": "data_flow",
+        "shared_resource": "table:dbo].[customer_dim",
+        "shared_resource_name": "dbo].[customer_dim",
+        "description": "pipeline:Customer.dtsx must complete before pipeline:ShioInfo.dtsx (via dbo].[customer_dim)"
+      },
+      {
+        "source_package": "pipeline:Customer.dtsx",
+        "target_package": "pipeline:Package4.dtsx",
+        "dependency_type": "data_flow",
+        "shared_resource": "table:dbo].[customer_dim",
+        "shared_resource_name": "dbo].[customer_dim",
+        "description": "pipeline:Customer.dtsx must complete before pipeline:Package4.dtsx (via dbo].[customer_dim)"
+      }
+    ],
+    "execution_order": [
+      [
+        "pipeline:Customer.dtsx",
+        "pipeline:Employee.dtsx",
+        "pipeline:Fact_orders.dtsx",
+        "pipeline:Product.dtsx",
+        "pipeline:Shippers.dtsx",
+        "pipeline:Suppliers.dtsx",
+        "pipeline:Emp.dtsx",
+        "pipeline:Fact.dtsx",
+        "pipeline:factFinal.dtsx",
+        "pipeline:Package.dtsx",
+        "pipeline:Package1.dtsx",
+        "pipeline:Package2.dtsx",
+        "pipeline:Package3.dtsx",
+        "pipeline:Package5.dtsx"
+      ],
+      [
+        "pipeline:Ship_Info.dtsx",
+        "pipeline:northwind.dtsx",
+        "pipeline:Package4.dtsx",
+        "pipeline:ShioInfo.dtsx"
+      ]
+    ]
+  }
+}
