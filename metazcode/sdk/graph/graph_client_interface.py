@@ -54,5 +54,10 @@ class GraphClientInterface(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def get_all_edges(self) -> List[Edge]:
+        """Retrieves all edges from the graph."""
+        raise NotImplementedError
+
+    @abstractmethod
     def get_graph(self):
         raise NotImplementedError

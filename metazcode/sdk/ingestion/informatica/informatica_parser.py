@@ -340,7 +340,8 @@ class CanonicalInformaticaParser:
         edges = []
         
         task_name = task_instance.get("NAME", "UnknownTask")
-        task_type = task_instance.get("TYPE", "UnknownType")
+        # Use TASKTYPE attribute for workflow task instances
+        task_type = task_instance.get("TASKTYPE") or task_instance.get("TYPE", "UnknownType")
         task_id = f"{workflow_id}:task:{task_name}"
         
         source_context = SourceContext.create_node_traceability(
@@ -756,15 +757,17 @@ class CanonicalInformaticaParser:
         """
         Parse a transformation instance and dispatch to specific transformation parsers.
         """
-        instance_name = instance.get("INSTANCENAME", "UnknownInstance")
-        transformation_name = instance.get("TRANSFORMATIONNAME", "")
-        transformation_type = instance.get("TRANSFORMATIONTYPE", "")
+        instance_name = instance.get("INSTANCENAME") or instance.get("NAME", "UnknownInstance")
+        transformation_name = instance.get("TRANSFORMATION_NAME") or instance.get("TRANSFORMATIONNAME", "")
+        transformation_type = instance.get("TRANSFORMATION_TYPE") or instance.get("TRANSFORMATIONTYPE", "")
         
         # Get transformation definition if available
         transformation_def = transformation_definitions.get(transformation_name, {})
         if not transformation_def:
             # For built-in transformations like Source Qualifier, use instance info
+            # CRITICAL: Include the element so transformation parsers can access TABLEATTRIBUTE data
             transformation_def = {
+                "element": instance,  # Use the passed element (TRANSFORMATION or INSTANCE)
                 "name": transformation_name,
                 "type": transformation_type,
                 "description": "",
@@ -827,7 +830,11 @@ class CanonicalInformaticaParser:
             "sequence generator": self._parse_sequence_generator_transformation,
             "update strategy": self._parse_update_strategy_transformation,
             "normalizer": self._parse_normalizer_transformation,
-            "rank": self._parse_rank_transformation
+            "rank": self._parse_rank_transformation,
+            # Additional transformation types found in real-world XML
+            "custom transformation": self._parse_generic_transformation,
+            "lookup procedure": self._parse_lookup_transformation,
+            "sequence": self._parse_sequence_generator_transformation
         }
         
         parser_method = parser_map.get(transformation_type)
@@ -906,7 +913,8 @@ class CanonicalInformaticaParser:
                     logger.debug(f"Created WRITES_TO edge: {from_node.node_id} -> {target_data_asset_id} "
                                 f"({from_field} -> {to_field})")
                 else:
-                    logger.warning(f"Source node not found for WRITES_TO: {from_instance}")
+                    logger.debug(f"Source node not found for WRITES_TO: {from_instance}. "
+                               f"Available nodes: {list(instance_nodes.keys())[:5]}...")
             
             # Handle Source Definition to Source Qualifier flow  
             elif from_instancetype == "Source Definition" and to_instancetype == "Source Qualifier":
@@ -976,12 +984,71 @@ class CanonicalInformaticaParser:
                     logger.debug(f"Created {edge_type.value} edge: {from_node.node_id} -> {to_node.node_id} "
                                 f"({from_field} -> {to_field})")
                 else:
-                    logger.warning(f"Missing nodes for connector: {from_instance} -> {to_instance}")
+                    logger.debug(f"Missing nodes for connector: {from_instance} -> {to_instance}. "
+                               f"Available: {list(instance_nodes.keys())[:3]}...")
         else:
             logger.warning(f"Incomplete connector: FROMINSTANCE='{from_instance}' "
                           f"TOINSTANCE='{to_instance}'")
         
         return edges
+
+    def _extract_sql_semantics(self, sql_or_expression: str, context_name: str = "") -> Dict[str, Any]:
+        """
+        Extract SQL semantics from SQL queries or Informatica expressions.
+        
+        This method handles both:
+        1. Raw SQL queries (Source Qualifiers)
+        2. Informatica expressions that contain SQL-like logic
+        """
+        if not sql_or_expression or not isinstance(sql_or_expression, str):
+            return {
+                "sql_semantics": None,
+                "has_sql": False
+            }
+        
+        # Decode HTML entities from XML (e.g., &gt; -> >, &lt; -> <, &amp; -> &)
+        import html
+        decoded_expression = html.unescape(sql_or_expression)
+        
+        # Check if this looks like a SQL query (SELECT, INSERT, UPDATE, DELETE)
+        sql_keywords = ["SELECT", "INSERT", "UPDATE", "DELETE"]
+        is_sql_query = any(keyword in decoded_expression.upper() for keyword in sql_keywords)
+        
+        if is_sql_query:
+            # Parse as SQL query
+            sql_semantics = self.sql_parser.parse_sql_semantics(decoded_expression)
+            return {
+                "sql_semantics": sql_semantics.to_dict(),
+                "has_sql": True,
+                "sql_type": "query"
+            }
+        else:
+            # Parse as Informatica expression (may contain SQL-like functions or logic)
+            # For now, we'll store the expression but not parse as full SQL
+            # Future enhancement: could parse Informatica expression functions
+            return {
+                "sql_semantics": {
+                    "original_query": decoded_expression,  # Store decoded version
+                    "original_xml": sql_or_expression,     # Store original XML for reference
+                    "tables": [],
+                    "joins": [],
+                    "columns": [],
+                    "where_clause": None,
+                    "migration_metadata": {
+                        "table_count": 0,
+                        "join_count": 0,
+                        "column_count": 0,
+                        "has_aliases": False,
+                        "has_joins": False,
+                        "join_types": [],
+                        "expression_type": "informatica_expression",
+                        "context": context_name,
+                        "has_decoded_content": decoded_expression != sql_or_expression
+                    }
+                },
+                "has_sql": bool(decoded_expression.strip()),  # True if has content after decoding
+                "sql_type": "expression"
+            }
 
     # Specific transformation parsers following SSIS parser patterns
 
@@ -1133,8 +1200,9 @@ class CanonicalInformaticaParser:
         nodes = []
         edges = []
         
-        instance_name = instance.get("INSTANCENAME", "")
-        transformation_name = instance.get("TRANSFORMATIONNAME", "")
+        # Handle both TRANSFORMATION and INSTANCE elements
+        instance_name = instance.get("INSTANCENAME") or instance.get("NAME", "")
+        transformation_name = instance.get("TRANSFORMATIONNAME") or instance.get("NAME", "")
         instance_id = f"{mapping_id}:expression:{instance_name}"
         
         source_context = SourceContext.create_node_traceability(
@@ -1149,6 +1217,7 @@ class CanonicalInformaticaParser:
         # Extract expressions and lookups from transformation definition
         expressions = {}
         unconnected_lookups = []
+        combined_expressions = []  # For SQL semantics analysis
         
         transformation_element = transformation_def.get("element")
         if transformation_element is not None:
@@ -1159,6 +1228,7 @@ class CanonicalInformaticaParser:
                 expression = field.get("EXPRESSION", "")
                 if expression:
                     expressions[field_name] = expression
+                    combined_expressions.append(expression)
                     
                     # Check for unconnected lookup calls in expression
                     lookup_pattern = r':LKP\.(\w+)\('
@@ -1166,6 +1236,13 @@ class CanonicalInformaticaParser:
                     for lookup_name in lookup_matches:
                         if lookup_name not in unconnected_lookups:
                             unconnected_lookups.append(lookup_name)
+        
+        # Extract SQL semantics from expressions
+        combined_expression_text = " | ".join(combined_expressions) if combined_expressions else ""
+        sql_semantics_result = self._extract_sql_semantics(
+            combined_expression_text, 
+            f"Expression transformation: {instance_name}"
+        )
         
         node = Node(
             node_id=instance_id,
@@ -1178,6 +1255,9 @@ class CanonicalInformaticaParser:
                 "operation_subtype": self._categorize_operation_subtype("Expression"),
                 "expressions": expressions,
                 "unconnected_lookups": unconnected_lookups,
+                "sql_semantics": sql_semantics_result.get("sql_semantics"),
+                "has_sql": sql_semantics_result.get("has_sql", False),
+                "sql_type": sql_semantics_result.get("sql_type", "expression"),
                 "source_context": source_context,
                 "informatica_type": "expression"
             }
@@ -1222,8 +1302,9 @@ class CanonicalInformaticaParser:
         nodes = []
         edges = []
         
-        instance_name = instance.get("INSTANCENAME", "")
-        transformation_name = instance.get("TRANSFORMATIONNAME", "")
+        # Handle both TRANSFORMATION and INSTANCE elements
+        instance_name = instance.get("INSTANCENAME") or instance.get("NAME", "")
+        transformation_name = instance.get("TRANSFORMATIONNAME") or instance.get("NAME", "")
         instance_id = f"{mapping_id}:joiner:{instance_name}"
         
         source_context = SourceContext.create_node_traceability(
@@ -1262,6 +1343,12 @@ class CanonicalInformaticaParser:
                 elif port_type == "INPUT" and "DETAIL" in port_type:
                     detail_source = field.get("NAME", "")
         
+        # Extract SQL semantics from join condition
+        sql_semantics_result = self._extract_sql_semantics(
+            join_condition, 
+            f"Joiner transformation: {instance_name} ({join_type})"
+        )
+        
         node = Node(
             node_id=instance_id,
             node_type=NodeType.OPERATION.value,
@@ -1275,6 +1362,9 @@ class CanonicalInformaticaParser:
                 "join_type": join_type,
                 "master_source": master_source,
                 "detail_source": detail_source,
+                "sql_semantics": sql_semantics_result.get("sql_semantics"),
+                "has_sql": sql_semantics_result.get("has_sql", False),
+                "sql_type": sql_semantics_result.get("sql_type", "expression"),
                 "source_context": source_context,
                 "informatica_type": "joiner"
             }
@@ -1339,6 +1429,14 @@ class CanonicalInformaticaParser:
                         "type": group_type
                     }
         
+        # Extract SQL semantics from router group expressions
+        all_router_expressions = [group["expression"] for group in groups.values() if group["expression"]]
+        combined_expressions = " | ".join(all_router_expressions) if all_router_expressions else ""
+        sql_semantics_result = self._extract_sql_semantics(
+            combined_expressions, 
+            f"Router transformation: {instance_name}"
+        )
+        
         node = Node(
             node_id=instance_id,
             node_type=NodeType.OPERATION.value,
@@ -1350,6 +1448,9 @@ class CanonicalInformaticaParser:
                 "operation_subtype": self._categorize_operation_subtype("Router"),
                 "groups": groups,
                 "default_group": default_group,
+                "sql_semantics": sql_semantics_result.get("sql_semantics"),
+                "has_sql": sql_semantics_result.get("has_sql", False),
+                "sql_type": sql_semantics_result.get("sql_type", "expression"),
                 "source_context": source_context,
                 "informatica_type": "router"
             }
@@ -1409,6 +1510,12 @@ class CanonicalInformaticaParser:
                 elif attr_name == "Lookup Condition":
                     lookup_condition = attr_value
         
+        # Extract SQL semantics from lookup condition
+        sql_semantics_result = self._extract_sql_semantics(
+            lookup_condition, 
+            f"Lookup transformation: {instance_name}"
+        )
+        
         # Get connection information for lookup (may use database connections)
         connection_name = session_context.get("connections", {}).get(instance_name, "")
         connection_details = self.connections_context.get(connection_name, {})
@@ -1430,6 +1537,9 @@ class CanonicalInformaticaParser:
                 "server": connection_details.get('server'),
                 "database": connection_details.get('database'),
                 "provider": connection_details.get('provider'),
+                "sql_semantics": sql_semantics_result.get("sql_semantics"),
+                "has_sql": sql_semantics_result.get("has_sql", False),
+                "sql_type": sql_semantics_result.get("sql_type", "expression"),
                 "source_context": source_context,
                 "informatica_type": "lookup"
             }
@@ -1513,8 +1623,9 @@ class CanonicalInformaticaParser:
         nodes = []
         edges = []
         
-        instance_name = instance.get("INSTANCENAME", "")
-        transformation_name = instance.get("TRANSFORMATIONNAME", "")
+        # Handle both TRANSFORMATION and INSTANCE elements
+        instance_name = instance.get("INSTANCENAME") or instance.get("NAME", "")
+        transformation_name = instance.get("TRANSFORMATIONNAME") or instance.get("NAME", "")
         instance_id = f"{mapping_id}:filter:{instance_name}"
         
         source_context = SourceContext.create_node_traceability(
@@ -1536,6 +1647,12 @@ class CanonicalInformaticaParser:
                     filter_condition = attr.get("VALUE", "")
                     break
         
+        # Extract SQL semantics from filter condition
+        sql_semantics_result = self._extract_sql_semantics(
+            filter_condition, 
+            f"Filter transformation: {instance_name}"
+        )
+        
         node = Node(
             node_id=instance_id,
             node_type=NodeType.OPERATION.value,
@@ -1546,6 +1663,9 @@ class CanonicalInformaticaParser:
                 "transformation_type": "Filter",
                 "operation_subtype": self._categorize_operation_subtype("Filter"),
                 "filter_condition": filter_condition,
+                "sql_semantics": sql_semantics_result.get("sql_semantics"),
+                "has_sql": sql_semantics_result.get("has_sql", False),
+                "sql_type": sql_semantics_result.get("sql_type", "expression"),
                 "source_context": source_context,
                 "informatica_type": "filter"
             }
@@ -1609,6 +1729,14 @@ class CanonicalInformaticaParser:
                 elif port_type == "GROUP BY":
                     group_by_fields.append(field_name)
         
+        # Extract SQL semantics from aggregate expressions
+        all_expressions = [agg["expression"] for agg in aggregate_functions] + group_by_fields
+        combined_expressions = " | ".join(all_expressions) if all_expressions else ""
+        sql_semantics_result = self._extract_sql_semantics(
+            combined_expressions, 
+            f"Aggregator transformation: {instance_name}"
+        )
+        
         node = Node(
             node_id=instance_id,
             node_type=NodeType.OPERATION.value,
@@ -1620,6 +1748,9 @@ class CanonicalInformaticaParser:
                 "operation_subtype": self._categorize_operation_subtype("Aggregator"),
                 "aggregate_functions": aggregate_functions,
                 "group_by_fields": group_by_fields,
+                "sql_semantics": sql_semantics_result.get("sql_semantics"),
+                "has_sql": sql_semantics_result.get("has_sql", False),
+                "sql_type": sql_semantics_result.get("sql_type", "expression"),
                 "source_context": source_context,
                 "informatica_type": "aggregator"
             }

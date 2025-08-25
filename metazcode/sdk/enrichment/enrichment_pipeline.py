@@ -1,8 +1,9 @@
 """
-Enrichment Pipeline for LLM-based Node Summary Generation
+Technology-Agnostic Enrichment Pipeline for LLM-based Node Summary Generation
 
-This module orchestrates the complete enrichment process, managing
-the flow from node selection through batch processing to final updates.
+This module orchestrates the complete enrichment process for any ETL/Data Pipeline
+platform, managing the flow from node selection through batch processing to final
+updates. It works with SSIS, Informatica, Talend, Airflow, and other platforms.
 """
 
 import os
@@ -13,7 +14,9 @@ from datetime import datetime
 from metazcode.sdk.graph.graph_client_interface import GraphClientInterface
 from metazcode.sdk.models.canonical_types import NodeType
 from .llm_client import OpenAIEnricher
+from .llm_factory import LLMClientFactory
 from .node_enricher import NodeEnricher
+from .edge_enricher import EdgeEnricher
 from .batch_processor import BatchProcessor
 
 logger = logging.getLogger(__name__)
@@ -21,11 +24,12 @@ logger = logging.getLogger(__name__)
 
 class EnrichmentPipeline:
     """
-    Orchestrates the LLM enrichment process for graph nodes.
+    Orchestrates the LLM enrichment process for graph nodes from any ETL platform.
     
-    This pipeline manages the complete enrichment workflow including:
-    - Node selection and filtering
-    - Batch processing for efficiency
+    This pipeline manages the complete enrichment workflow for SSIS, Informatica,
+    Talend, Airflow, and other data integration platforms, including:
+    - Technology-neutral node selection and filtering
+    - Batch processing for efficiency across platforms
     - Progress tracking and reporting
     - Error handling and recovery
     """
@@ -33,32 +37,39 @@ class EnrichmentPipeline:
     def __init__(
         self, 
         graph_client: GraphClientInterface,
+        provider: str = "openai",
+        model: Optional[str] = None,
         api_key: Optional[str] = None,
-        model: str = "gpt-4o-mini",
-        batch_size: int = 10
+        batch_size: int = 10,
+        **provider_kwargs
     ):
         """
         Initialize the enrichment pipeline.
         
         Args:
             graph_client: Interface to the graph database
+            provider: LLM provider to use (openai, openrouter)
+            model: LLM model to use for enrichment (uses provider default if not specified)
             api_key: API key for the LLM provider (defaults to env var)
-            model: LLM model to use for enrichment
             batch_size: Number of nodes to process in parallel
+            **provider_kwargs: Additional provider-specific arguments
         """
         self.graph_client = graph_client
+        self.provider = provider
         self.model = model
         self.batch_size = batch_size
         
-        # Initialize LLM client
-        self.api_key = api_key or os.getenv('OPENAI_API_KEY')
-        if not self.api_key:
-            raise ValueError("No API key provided. Set OPENAI_API_KEY environment variable.")
-            
-        self.llm_client = OpenAIEnricher(api_key=self.api_key, model=model)
+        # Initialize LLM client using factory
+        self.llm_client = LLMClientFactory.create_client(
+            provider=provider,
+            model=model,
+            api_key=api_key,
+            **provider_kwargs
+        )
         
         # Initialize components
         self.node_enricher = NodeEnricher(graph_client, self.llm_client)
+        self.edge_enricher = EdgeEnricher(graph_client, self.llm_client)
         self.batch_processor = BatchProcessor(self.node_enricher, batch_size)
         
         # Track pipeline statistics
@@ -72,12 +83,13 @@ class EnrichmentPipeline:
             "skipped": 0
         }
     
-    def enrich_graph(self, node_types: Optional[List[str]] = None) -> Dict[str, Any]:
+    def enrich_graph(self, node_types: Optional[List[str]] = None, include_edges: bool = True) -> Dict[str, Any]:
         """
-        Enrich all eligible nodes in the graph with LLM summaries.
+        Enrich all eligible nodes and edges in the graph with LLM summaries.
         
         Args:
             node_types: Optional list of node types to enrich (defaults to operation/pipeline)
+            include_edges: Whether to also enrich semantic edges (defaults to True)
             
         Returns:
             Summary of the enrichment process
@@ -86,26 +98,42 @@ class EnrichmentPipeline:
         logger.info("Starting enrichment pipeline")
         
         try:
-            # Select nodes for enrichment
+            # Phase 1: Node Enrichment
+            logger.info("Phase 1: Node enrichment")
             nodes_to_enrich = self._select_nodes_for_enrichment(node_types)
             self.pipeline_stats["total_nodes"] = len(nodes_to_enrich)
             
-            if not nodes_to_enrich:
+            if nodes_to_enrich:
+                logger.info(f"Found {len(nodes_to_enrich)} nodes to enrich")
+                
+                # Estimate processing time
+                estimated_time = self._estimate_processing_time(len(nodes_to_enrich))
+                logger.info(f"Estimated node processing time: {estimated_time:.1f} minutes")
+                
+                # Process nodes in batches
+                print(f"Processing {len(nodes_to_enrich)} nodes...")
+                batch_results = self.batch_processor.process_nodes(nodes_to_enrich)
+                
+                # Update statistics
+                self.pipeline_stats.update(batch_results)
+            else:
                 logger.info("No nodes selected for enrichment")
-                return self._create_summary()
             
-            logger.info(f"Found {len(nodes_to_enrich)} nodes to enrich")
-            
-            # Estimate processing time
-            estimated_time = self._estimate_processing_time(len(nodes_to_enrich))
-            logger.info(f"Estimated processing time: {estimated_time:.1f} minutes")
-            
-            # Process nodes in batches
-            print(f"Processing {len(nodes_to_enrich)} nodes...")
-            batch_results = self.batch_processor.process_nodes(nodes_to_enrich)
-            
-            # Update statistics
-            self.pipeline_stats.update(batch_results)
+            # Phase 2: Edge Enrichment (if enabled)
+            if include_edges:
+                logger.info("Phase 2: Edge enrichment")
+                print("Enriching semantic edges...")
+                edge_results = self.edge_enricher.enrich_semantic_edges()
+                
+                # Add edge stats to pipeline stats
+                self.pipeline_stats["total_edges"] = edge_results.get("total_edges", 0)
+                self.pipeline_stats["semantic_edges"] = edge_results.get("semantic_edges", 0)
+                self.pipeline_stats["edges_enriched"] = edge_results.get("successfully_enriched", 0)
+                self.pipeline_stats["edges_failed"] = edge_results.get("failed", 0)
+                
+                logger.info(f"Enriched {edge_results.get('successfully_enriched', 0)} out of {edge_results.get('semantic_edges', 0)} semantic edges")
+            else:
+                logger.info("Skipping edge enrichment")
             
             return self._create_summary()
             
@@ -124,17 +152,15 @@ class EnrichmentPipeline:
             Configuration validation results
         """
         validation = {
-            "api_key_present": bool(self.api_key),
-            "api_key_format": self._validate_api_key_format(),
-            "model_supported": self.model in ["gpt-4o-mini", "gpt-4", "gpt-3.5-turbo"],
+            "provider": self.provider,
+            "model": self.model or "default",
+            "api_key_present": bool(getattr(self.llm_client, 'api_key', None)),
             "graph_client_connected": self._validate_graph_connection(),
             "estimated_cost_per_node": self._estimate_cost_per_node()
         }
         
         validation["ready"] = all([
             validation["api_key_present"],
-            validation["api_key_format"],
-            validation["model_supported"],
             validation["graph_client_connected"]
         ])
         
@@ -194,11 +220,17 @@ class EnrichmentPipeline:
     
     def _validate_api_key_format(self) -> bool:
         """Validate that the API key has the correct format."""
-        if not self.api_key:
+        api_key = getattr(self.llm_client, 'api_key', None)
+        if not api_key:
             return False
         
-        # OpenAI keys start with 'sk-'
-        return self.api_key.startswith('sk-')
+        # Different providers have different key formats
+        if self.provider == "openai":
+            return api_key.startswith('sk-')
+        elif self.provider == "openrouter":
+            return len(api_key) > 10  # Basic length check
+        else:
+            return True  # Generic validation
     
     def _validate_graph_connection(self) -> bool:
         """Validate that we can connect to the graph."""
@@ -232,6 +264,11 @@ class EnrichmentPipeline:
         # Get final stats from components
         enrichment_stats = self.node_enricher.get_enrichment_stats()
         
+        # Calculate edge success rate
+        total_edges = self.pipeline_stats.get("semantic_edges", 0)
+        edges_enriched = self.pipeline_stats.get("edges_enriched", 0)
+        edge_success_rate = (edges_enriched / max(total_edges, 1)) * 100 if total_edges > 0 else 0
+        
         return {
             "status": "completed",
             "pipeline_config": {
@@ -246,14 +283,21 @@ class EnrichmentPipeline:
                 "failed": self.pipeline_stats["failed"],
                 "success_rate": (self.pipeline_stats["successful"] / max(self.pipeline_stats["processed"], 1)) * 100
             },
-            "enrichment": enrichment_stats,
-            "summary": {
+            "nodes": {
                 "total_nodes": self.pipeline_stats["total_nodes"],
                 "successfully_enriched": enrichment_stats["successfully_enriched"],
                 "failed": enrichment_stats["failed"],
                 "skipped": enrichment_stats["skipped"],
                 "success_rate": (enrichment_stats["successfully_enriched"] / max(self.pipeline_stats["total_nodes"], 1)) * 100
-            }
+            },
+            "edges": {
+                "total_edges": self.pipeline_stats.get("total_edges", 0),
+                "semantic_edges": self.pipeline_stats.get("semantic_edges", 0),
+                "successfully_enriched": self.pipeline_stats.get("edges_enriched", 0),
+                "failed": self.pipeline_stats.get("edges_failed", 0),
+                "success_rate": edge_success_rate
+            },
+            "enrichment": enrichment_stats
         }
     
     def _log_summary(self):

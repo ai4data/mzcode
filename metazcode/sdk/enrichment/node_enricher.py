@@ -1,8 +1,16 @@
 """
-Node Enricher for LLM-based Summary Generation
+Technology-Agnostic Node Enricher for LLM-based Summary Generation
 
-This module handles the enrichment of individual graph nodes with LLM-generated
-business summaries, leveraging existing context collection and prompt generation.
+This module handles the enrichment of individual graph nodes from any ETL/Data Pipeline
+platform with LLM-generated business summaries. It works with:
+- SSIS (Microsoft SQL Server Integration Services) 
+- Informatica PowerCenter/Cloud
+- Talend Open Studio/Enterprise
+- Apache Airflow
+- AWS Glue, Azure Data Factory, Google Dataflow
+- Custom ETL solutions
+
+The enricher uses universal node concepts and context-aware prompt generation.
 """
 
 import logging
@@ -20,10 +28,11 @@ logger = logging.getLogger(__name__)
 
 class NodeEnricher:
     """
-    Enriches graph nodes with LLM-generated business summaries.
+    Enriches graph nodes with LLM-generated business summaries for any ETL platform.
     
-    This class coordinates between the graph, context collection, and LLM
-    to add meaningful summaries to SSIS operations and pipelines.
+    This class coordinates between the graph, context collection, and LLM to add
+    meaningful summaries to operations and pipelines from SSIS, Informatica, Talend,
+    Airflow, and other data integration technologies.
     """
     
     def __init__(
@@ -138,13 +147,13 @@ class NodeEnricher:
             node_id = node_data["id"]
             attributes = node_data.get("attributes", {})
             
-            # Build simplified context directly from node attributes
+            # Build context using graph traversal for better source/destination detection
             operation_context = OperationContext(
                 operation_name=attributes.get("name", "Unknown Operation"),
                 operation_type=attributes.get("operation_subtype", "Unknown"),
                 pipeline_name=self._get_pipeline_name_from_id(node_id),
-                source_connections=self._get_simple_sources(attributes),
-                destination_connections=self._get_simple_destinations(attributes),
+                source_connections=self._get_operation_sources(node_id),
+                destination_connections=self._get_operation_destinations(node_id),
                 transformation_summary=self._create_transformation_summary(node_data, {})
             )
             
@@ -324,18 +333,45 @@ class NodeEnricher:
     def _get_pipeline_operations(self, pipeline_id: str) -> List[Dict[str, Any]]:
         """Get all operations within a pipeline."""
         operations = []
-        # Simplified implementation - get from underlying graph directly
         try:
             graph = self.graph_client.get_graph()
             if hasattr(graph, 'successors'):
-                for successor in graph.successors(pipeline_id):
-                    node_data = self.graph_client.get_node(successor)
-                    if node_data and node_data.get("attributes", {}).get("node_type") == "operation":
-                        attributes = node_data.get("attributes", {})
-                        operations.append({
-                            "name": attributes.get("name", ""),
-                            "type": attributes.get("operation_subtype", "")
-                        })
+                # Use a queue for breadth-first traversal to find all operations
+                visited = set()
+                queue = [pipeline_id]
+                
+                while queue:
+                    current_node = queue.pop(0)
+                    if current_node in visited:
+                        continue
+                    visited.add(current_node)
+                    
+                    for successor in graph.successors(current_node):
+                        edge_data = graph.get_edge_data(current_node, successor)
+                        # Look for CONTAINS relationships
+                        if edge_data and edge_data.get("relation") == "contains":
+                            successor_data = self.graph_client.get_node(successor)
+                            if successor_data:
+                                attributes = successor_data.get("attributes", {})
+                                node_type = attributes.get("node_type")
+                                
+                                if node_type == "operation":
+                                    # Extract operation details
+                                    operation_info = {
+                                        "name": attributes.get("name", ""),
+                                        "type": attributes.get("operation_subtype", ""),
+                                        "id": successor
+                                    }
+                                    
+                                    # Add SQL info if available
+                                    sql = attributes.get("sql", "")
+                                    if sql:
+                                        operation_info["sql_summary"] = sql[:100] + "..." if len(sql) > 100 else sql
+                                    
+                                    operations.append(operation_info)
+                                    
+                                # Continue traversal for nested operations
+                                queue.append(successor)
         except Exception as e:
             logger.warning(f"Could not get operations for pipeline {pipeline_id}: {e}")
         
@@ -344,15 +380,129 @@ class NodeEnricher:
     def _get_pipeline_sources(self, pipeline_id: str) -> List[str]:
         """Get all source tables/files for a pipeline."""
         sources = set()
-        # This would traverse the graph to find all READ_FROM relationships
-        # For now, return a simplified version
+        try:
+            graph = self.graph_client.get_graph()
+            if hasattr(graph, 'successors'):
+                # Get all operations in this pipeline
+                operations = self._get_pipeline_operations(pipeline_id)
+                
+                # For each operation, find what it reads from
+                for operation in operations:
+                    operation_id = operation.get("id")
+                    if operation_id and operation_id in graph.nodes:
+                        # Check outgoing edges for READS_FROM relationships
+                        for successor in graph.successors(operation_id):
+                            edge_data = graph.get_edge_data(operation_id, successor)
+                            if edge_data and edge_data.get("relation") == "reads_from":
+                                target_data = self.graph_client.get_node(successor)
+                                if target_data:
+                                    target_attrs = target_data.get("attributes", {})
+                                    if target_attrs.get("node_type") in ["data_asset", "table", "file"]:
+                                        source_name = target_attrs.get("name", "")
+                                        if source_name:
+                                            sources.add(source_name)
+                        
+                        # Also check incoming edges (reversed direction)
+                        for predecessor in graph.predecessors(operation_id):
+                            edge_data = graph.get_edge_data(predecessor, operation_id)
+                            if edge_data and edge_data.get("relation") == "reads_from":
+                                pred_data = self.graph_client.get_node(predecessor)
+                                if pred_data:
+                                    pred_attrs = pred_data.get("attributes", {})
+                                    if pred_attrs.get("node_type") in ["data_asset", "table", "file"]:
+                                        source_name = pred_attrs.get("name", "")
+                                        if source_name:
+                                            sources.add(source_name)
+        except Exception as e:
+            logger.warning(f"Could not get sources for pipeline {pipeline_id}: {e}")
+        
         return list(sources)
     
     def _get_pipeline_destinations(self, pipeline_id: str) -> List[str]:
         """Get all destination tables/files for a pipeline."""
         destinations = set()
-        # This would traverse the graph to find all WRITES_TO relationships
-        # For now, return a simplified version
+        try:
+            graph = self.graph_client.get_graph()
+            if hasattr(graph, 'successors'):
+                # Get all operations in this pipeline
+                operations = self._get_pipeline_operations(pipeline_id)
+                
+                # For each operation, find what it writes to
+                for operation in operations:
+                    operation_id = operation.get("id")
+                    if operation_id and operation_id in graph.nodes:
+                        # Check outgoing edges for WRITES_TO relationships
+                        for successor in graph.successors(operation_id):
+                            edge_data = graph.get_edge_data(operation_id, successor)
+                            if edge_data and edge_data.get("relation") == "writes_to":
+                                target_data = self.graph_client.get_node(successor)
+                                if target_data:
+                                    target_attrs = target_data.get("attributes", {})
+                                    if target_attrs.get("node_type") in ["data_asset", "table", "file"]:
+                                        dest_name = target_attrs.get("name", "")
+                                        if dest_name:
+                                            destinations.add(dest_name)
+                        
+                        # Also check incoming edges (reversed direction)
+                        for predecessor in graph.predecessors(operation_id):
+                            edge_data = graph.get_edge_data(predecessor, operation_id)
+                            if edge_data and edge_data.get("relation") == "writes_to":
+                                pred_data = self.graph_client.get_node(predecessor)
+                                if pred_data:
+                                    pred_attrs = pred_data.get("attributes", {})
+                                    if pred_attrs.get("node_type") in ["data_asset", "table", "file"]:
+                                        dest_name = pred_attrs.get("name", "")
+                                        if dest_name:
+                                            destinations.add(dest_name)
+        except Exception as e:
+            logger.warning(f"Could not get destinations for pipeline {pipeline_id}: {e}")
+        
+        return list(destinations)
+    
+    def _get_operation_sources(self, operation_id: str) -> List[str]:
+        """Get all source tables/files for a specific operation."""
+        sources = set()
+        try:
+            graph = self.graph_client.get_graph()
+            if hasattr(graph, 'successors') and operation_id in graph.nodes:
+                # Check outgoing edges for READS_FROM relationships
+                for successor in graph.successors(operation_id):
+                    edge_data = graph.get_edge_data(operation_id, successor)
+                    if edge_data and edge_data.get("relation") == "reads_from":
+                        target_data = self.graph_client.get_node(successor)
+                        if target_data:
+                            target_attrs = target_data.get("attributes", {})
+                            # Look for data assets, tables, files, or other data containers
+                            if target_attrs.get("node_type") in ["data_asset", "table", "file"]:
+                                source_name = target_attrs.get("name", "")
+                                if source_name:
+                                    sources.add(source_name)
+        except Exception as e:
+            logger.warning(f"Could not get sources for operation {operation_id}: {e}")
+        
+        return list(sources)
+    
+    def _get_operation_destinations(self, operation_id: str) -> List[str]:
+        """Get all destination tables/files for a specific operation."""
+        destinations = set()
+        try:
+            graph = self.graph_client.get_graph()
+            if hasattr(graph, 'successors') and operation_id in graph.nodes:
+                # Check outgoing edges for WRITES_TO relationships
+                for successor in graph.successors(operation_id):
+                    edge_data = graph.get_edge_data(operation_id, successor)
+                    if edge_data and edge_data.get("relation") == "writes_to":
+                        target_data = self.graph_client.get_node(successor)
+                        if target_data:
+                            target_attrs = target_data.get("attributes", {})
+                            # Look for data assets, tables, files, or other data containers
+                            if target_attrs.get("node_type") in ["data_asset", "table", "file"]:
+                                dest_name = target_attrs.get("name", "")
+                                if dest_name:
+                                    destinations.add(dest_name)
+        except Exception as e:
+            logger.warning(f"Could not get destinations for operation {operation_id}: {e}")
+        
         return list(destinations)
     
     def _get_pipeline_name_from_id(self, operation_id: str) -> str:

@@ -1,0 +1,519 @@
+{
+  "directed": true,
+  "multigraph": false,
+  "graph": {},
+  "nodes": [
+    {
+      "node_type": "pipeline",
+      "name": "wf_m_q4",
+      "properties": {
+        "name": "wf_m_q4",
+        "description": "These workflows are created from the Workflow Generation Wizard.",
+        "is_valid": true,
+        "version_number": "1",
+        "source_context": {
+          "source_file_path": "/mnt/c/Users/Hicham/OneDrive/python/projects/mzcode/data/informatica/hassan-hosny/Q4/wf_m_q4.XML",
+          "source_file_type": "xml",
+          "technology": "Informatica",
+          "xml_path": "//WORKFLOW[@NAME='wf_m_q4']",
+          "line_number": 135
+        },
+        "informatica_type": "workflow"
+      },
+      "context": {},
+      "id": "workflow:wf_m_q4"
+    },
+    {
+      "node_type": "operation",
+      "name": "Start",
+      "properties": {
+        "name": "Start",
+        "task_type": "Start",
+        "operation_subtype": "DATA_FLOW",
+        "description": "",
+        "is_reusable": false,
+        "source_context": {
+          "source_file_path": "/mnt/c/Users/Hicham/OneDrive/python/projects/mzcode/data/informatica/hassan-hosny/Q4/wf_m_q4.XML",
+          "source_file_type": "xml",
+          "technology": "Informatica",
+          "xml_path": "//TASKINSTANCE[@NAME='Start']",
+          "line_number": 210
+        },
+        "informatica_type": "task_instance"
+      },
+      "context": {},
+      "id": "workflow:wf_m_q4:task:Start"
+    },
+    {
+      "node_type": "operation",
+      "name": "s_m_q4",
+      "properties": {
+        "name": "s_m_q4",
+        "task_type": "Session",
+        "operation_subtype": "CONTROL_FLOW",
+        "description": "",
+        "is_reusable": false,
+        "source_context": {
+          "source_file_path": "/mnt/c/Users/Hicham/OneDrive/python/projects/mzcode/data/informatica/hassan-hosny/Q4/wf_m_q4.XML",
+          "source_file_type": "xml",
+          "technology": "Informatica",
+          "xml_path": "//TASKINSTANCE[@NAME='s_m_q4']",
+          "line_number": 211
+        },
+        "informatica_type": "task_instance"
+      },
+      "context": {},
+      "id": "workflow:wf_m_q4:task:s_m_q4"
+    },
+    {
+      "node_type": "data_asset",
+      "name": "Churn_Modelling3",
+      "properties": {
+        "name": "Churn_Modelling3",
+        "database_type": "Flat File",
+        "description": "",
+        "owner_name": "",
+        "fields": [
+          {
+            "informatica_native_type": "number",
+            "canonical_type": "DECIMAL",
+            "target_types": {
+              "sql_server": "DECIMAL(8)",
+              "postgresql": "DECIMAL(8)"
+            },
+            "type_precision": 8,
+            "type_scale": 0,
+            "type_length": 8,
+            "nullable": true,
+            "conversion_confidence": 1.0,
+            "potential_issues": [],
+            "type_category": "numeric",
+            "supports_indexing": true,
+            "supports_sorting": true,
+            "name": "CustomerId",
+            "key_type": "NOT A KEY",
+            "field_number": 1
+          },
+          {
+            "informatica_native_type": "number",
+            "canonical_type": "DECIMAL",
+            "target_types": {
+              "sql_server": "DECIMAL(9)",
+              "postgresql": "DECIMAL(9)"
+            },
+            "type_precision": 9,
+            "type_scale": 0,
+            "type_length": 9,
+            "nullable": true,
+            "conversion_confidence": 1.0,
+            "potential_issues": [],
+            "type_category": "numeric",
+            "supports_indexing": true,
+            "supports_sorting": true,
+            "name": "Balance",
+            "key_type": "NOT A KEY",
+            "field_number": 2
+          },
+          {
+            "informatica_native_type": "number",
+            "canonical_type": "DECIMAL",
+            "target_types": {
+              "sql_server": "DECIMAL(1)",
+              "postgresql": "DECIMAL(1)"
+            },
+            "type_precision": 1,
+            "type_scale": 0,
+            "type_length": 1,
+            "nullable": true,
+            "conversion_confidence": 1.0,
+            "potential_issues": [],
+            "type_category": "numeric",
+            "supports_indexing": true,
+            "supports_sorting": true,
+            "name": "IsActiveMember",
+            "key_type": "NOT A KEY",
+            "field_number": 3
+          }
+        ],
+        "source_context": {
+          "source_file_path": "/mnt/c/Users/Hicham/OneDrive/python/projects/mzcode/data/informatica/hassan-hosny/Q4/wf_m_q4.XML",
+          "source_file_type": "xml",
+          "technology": "Informatica",
+          "xml_path": "//SOURCE[@NAME='Churn_Modelling3']",
+          "line_number": 6
+        },
+        "informatica_type": "source",
+        "asset_type": "table"
+      },
+      "context": {},
+      "id": "data_asset:source:Churn_Modelling3"
+    },
+    {
+      "node_type": "data_asset",
+      "name": "SRTTRANS",
+      "properties": {
+        "name": "SRTTRANS",
+        "database_type": "Flat File",
+        "description": "",
+        "fields": [
+          {
+            "informatica_native_type": "number",
+            "canonical_type": "DECIMAL",
+            "target_types": {
+              "sql_server": "DECIMAL(8)",
+              "postgresql": "DECIMAL(8)"
+            },
+            "type_precision": 8,
+            "type_scale": 0,
+            "type_length": null,
+            "nullable": true,
+            "conversion_confidence": 1.0,
+            "potential_issues": [],
+            "type_category": "numeric",
+            "supports_indexing": true,
+            "supports_sorting": true,
+            "name": "CustomerId",
+            "key_type": "NOT A KEY",
+            "field_number": 1
+          },
+          {
+            "informatica_native_type": "number",
+            "canonical_type": "DECIMAL",
+            "target_types": {
+              "sql_server": "DECIMAL(9)",
+              "postgresql": "DECIMAL(9)"
+            },
+            "type_precision": 9,
+            "type_scale": 0,
+            "type_length": null,
+            "nullable": true,
+            "conversion_confidence": 1.0,
+            "potential_issues": [],
+            "type_category": "numeric",
+            "supports_indexing": true,
+            "supports_sorting": true,
+            "name": "Balance",
+            "key_type": "NOT A KEY",
+            "field_number": 2
+          },
+          {
+            "informatica_native_type": "int",
+            "canonical_type": "INTEGER",
+            "target_types": {
+              "sql_server": "INT",
+              "postgresql": "INTEGER"
+            },
+            "type_precision": 10,
+            "type_scale": 0,
+            "type_length": null,
+            "nullable": true,
+            "conversion_confidence": 1.0,
+            "potential_issues": [],
+            "type_category": "numeric",
+            "supports_indexing": true,
+            "supports_sorting": true,
+            "name": "Rank",
+            "key_type": "NOT A KEY",
+            "field_number": 3
+          }
+        ],
+        "source_context": {
+          "source_file_path": "/mnt/c/Users/Hicham/OneDrive/python/projects/mzcode/data/informatica/hassan-hosny/Q4/wf_m_q4.XML",
+          "source_file_type": "xml",
+          "technology": "Informatica",
+          "xml_path": "//TARGET[@NAME='SRTTRANS']",
+          "line_number": 19
+        },
+        "informatica_type": "target",
+        "asset_type": "table"
+      },
+      "context": {},
+      "id": "data_asset:target:SRTTRANS"
+    },
+    {
+      "node_type": "pipeline",
+      "name": "m_q4",
+      "properties": {
+        "name": "m_q4",
+        "description": "",
+        "is_valid": true,
+        "version_number": "2",
+        "source_context": {
+          "source_file_path": "/mnt/c/Users/Hicham/OneDrive/python/projects/mzcode/data/informatica/hassan-hosny/Q4/wf_m_q4.XML",
+          "source_file_type": "xml",
+          "technology": "Informatica",
+          "xml_path": "//MAPPING[@NAME='m_q4']",
+          "line_number": 29
+        },
+        "informatica_type": "mapping"
+      },
+      "context": {},
+      "id": "mapping:m_q4"
+    },
+    {
+      "node_type": "operation",
+      "name": "SQ_Churn_Modelling3",
+      "properties": {
+        "name": "SQ_Churn_Modelling3",
+        "transformation_name": "SQ_Churn_Modelling3",
+        "transformation_type": "Source Qualifier",
+        "operation_subtype": "DATA_FLOW",
+        "sql_query": "",
+        "sql_semantics": {
+          "original_query": "",
+          "tables": [],
+          "joins": [],
+          "columns": [],
+          "where_clause": null,
+          "migration_metadata": {
+            "table_count": 0,
+            "join_count": 0,
+            "column_count": 0,
+            "has_aliases": false,
+            "has_joins": false,
+            "join_types": []
+          }
+        },
+        "associated_source": "Churn_Modelling3",
+        "source_context": {
+          "source_file_path": "/mnt/c/Users/Hicham/OneDrive/python/projects/mzcode/data/informatica/hassan-hosny/Q4/wf_m_q4.XML",
+          "source_file_type": "xml",
+          "technology": "Informatica",
+          "xml_path": "//INSTANCE[@INSTANCENAME='SQ_Churn_Modelling3']",
+          "line_number": 79
+        },
+        "informatica_type": "source_qualifier"
+      },
+      "context": {},
+      "id": "mapping:m_q4:source_qualifier:SQ_Churn_Modelling3"
+    },
+    {
+      "node_type": "operation",
+      "name": "FILTRANS",
+      "properties": {
+        "name": "FILTRANS",
+        "transformation_name": "FILTRANS",
+        "transformation_type": "Filter",
+        "operation_subtype": "DATA_FLOW",
+        "filter_condition": "Balance>0",
+        "sql_semantics": {
+          "original_query": "Balance>0",
+          "original_xml": "Balance>0",
+          "tables": [],
+          "joins": [],
+          "columns": [],
+          "where_clause": null,
+          "migration_metadata": {
+            "table_count": 0,
+            "join_count": 0,
+            "column_count": 0,
+            "has_aliases": false,
+            "has_joins": false,
+            "join_types": [],
+            "expression_type": "informatica_expression",
+            "context": "Filter transformation: FILTRANS",
+            "has_decoded_content": false
+          }
+        },
+        "has_sql": true,
+        "sql_type": "expression",
+        "source_context": {
+          "source_file_path": "/mnt/c/Users/Hicham/OneDrive/python/projects/mzcode/data/informatica/hassan-hosny/Q4/wf_m_q4.XML",
+          "source_file_type": "xml",
+          "technology": "Informatica",
+          "xml_path": "//INSTANCE[@INSTANCENAME='FILTRANS']",
+          "line_number": 82
+        },
+        "informatica_type": "filter"
+      },
+      "context": {},
+      "id": "mapping:m_q4:filter:FILTRANS"
+    },
+    {
+      "node_type": "operation",
+      "name": "",
+      "properties": {
+        "name": "",
+        "transformation_name": "",
+        "transformation_type": "Sorter",
+        "operation_subtype": "DATA_FLOW",
+        "sort_keys": [],
+        "case_sensitive": true,
+        "distinct": false,
+        "sort_origin": "data",
+        "source_context": {
+          "source_file_path": "/mnt/c/Users/Hicham/OneDrive/python/projects/mzcode/data/informatica/hassan-hosny/Q4/wf_m_q4.XML",
+          "source_file_type": "xml",
+          "technology": "Informatica",
+          "xml_path": "//INSTANCE[@INSTANCENAME='']",
+          "line_number": 83
+        },
+        "informatica_type": "sorter"
+      },
+      "context": {},
+      "id": "mapping:m_q4:sorter:"
+    },
+    {
+      "node_type": "operation",
+      "name": "",
+      "properties": {
+        "name": "",
+        "transformation_name": "",
+        "transformation_type": "Sequence Generator",
+        "operation_subtype": "DATA_FLOW",
+        "start_value": "0",
+        "increment_by": "1",
+        "max_value": "",
+        "cycle": false,
+        "source_context": {
+          "source_file_path": "/mnt/c/Users/Hicham/OneDrive/python/projects/mzcode/data/informatica/hassan-hosny/Q4/wf_m_q4.XML",
+          "source_file_type": "xml",
+          "technology": "Informatica",
+          "xml_path": "//INSTANCE[@INSTANCENAME='']",
+          "line_number": 84
+        },
+        "informatica_type": "sequence_generator"
+      },
+      "context": {},
+      "id": "mapping:m_q4:sequence_generator:"
+    }
+  ],
+  "links": [
+    {
+      "relation": "contains",
+      "properties": {
+        "source_context": {
+          "source_file_path": "/mnt/c/Users/Hicham/OneDrive/python/projects/mzcode/data/informatica/hassan-hosny/Q4/wf_m_q4.XML",
+          "source_file_type": "xml",
+          "technology": "Informatica",
+          "xml_path": "//TASKINSTANCE[@NAME='Start']",
+          "line_number": 210
+        }
+      },
+      "source": "workflow:wf_m_q4",
+      "target": "workflow:wf_m_q4:task:Start"
+    },
+    {
+      "relation": "contains",
+      "properties": {
+        "source_context": {
+          "source_file_path": "/mnt/c/Users/Hicham/OneDrive/python/projects/mzcode/data/informatica/hassan-hosny/Q4/wf_m_q4.XML",
+          "source_file_type": "xml",
+          "technology": "Informatica",
+          "xml_path": "//TASKINSTANCE[@NAME='s_m_q4']",
+          "line_number": 211
+        }
+      },
+      "source": "workflow:wf_m_q4",
+      "target": "workflow:wf_m_q4:task:s_m_q4"
+    },
+    {
+      "relation": "depends_on",
+      "properties": {
+        "link_type": "workflow_execution_order",
+        "condition": "",
+        "source_context": {
+          "source_file_path": "/mnt/c/Users/Hicham/OneDrive/python/projects/mzcode/data/informatica/hassan-hosny/Q4/wf_m_q4.XML",
+          "source_file_type": "xml",
+          "technology": "Informatica",
+          "xml_path": "//WORKFLOWLINK[@FROMTASK='Start'][@TOTASK='s_m_q4']",
+          "line_number": 212
+        }
+      },
+      "source": "workflow:wf_m_q4:task:Start",
+      "target": "workflow:wf_m_q4:task:s_m_q4"
+    },
+    {
+      "relation": "depends_on",
+      "properties": {
+        "relationship": "session_executes_mapping",
+        "mapping_name": "m_q4",
+        "session_name": "s_m_q4",
+        "derivation_method": "xml_metadata",
+        "confidence_level": "high",
+        "source_context": {
+          "source_file_path": "/mnt/c/Users/Hicham/OneDrive/python/projects/mzcode/data/informatica/hassan-hosny/Q4/wf_m_q4.XML",
+          "source_file_type": "xml",
+          "technology": "Informatica",
+          "xml_path": "//SESSION[@NAME='s_m_q4'][@MAPPINGNAME='m_q4']"
+        }
+      },
+      "source": "workflow:wf_m_q4:task:s_m_q4",
+      "target": "mapping:m_q4"
+    },
+    {
+      "relation": "contains",
+      "properties": {
+        "source_context": {
+          "source_file_path": "/mnt/c/Users/Hicham/OneDrive/python/projects/mzcode/data/informatica/hassan-hosny/Q4/wf_m_q4.XML",
+          "source_file_type": "xml",
+          "technology": "Informatica",
+          "xml_path": "//INSTANCE[@INSTANCENAME='SQ_Churn_Modelling3']",
+          "line_number": 79
+        }
+      },
+      "source": "mapping:m_q4",
+      "target": "mapping:m_q4:source_qualifier:SQ_Churn_Modelling3"
+    },
+    {
+      "relation": "contains",
+      "properties": {
+        "source_context": {
+          "source_file_path": "/mnt/c/Users/Hicham/OneDrive/python/projects/mzcode/data/informatica/hassan-hosny/Q4/wf_m_q4.XML",
+          "source_file_type": "xml",
+          "technology": "Informatica",
+          "xml_path": "//INSTANCE[@INSTANCENAME='FILTRANS']",
+          "line_number": 82
+        }
+      },
+      "source": "mapping:m_q4",
+      "target": "mapping:m_q4:filter:FILTRANS"
+    },
+    {
+      "relation": "contains",
+      "properties": {
+        "source_context": {
+          "source_file_path": "/mnt/c/Users/Hicham/OneDrive/python/projects/mzcode/data/informatica/hassan-hosny/Q4/wf_m_q4.XML",
+          "source_file_type": "xml",
+          "technology": "Informatica",
+          "xml_path": "//INSTANCE[@INSTANCENAME='']",
+          "line_number": 83
+        }
+      },
+      "source": "mapping:m_q4",
+      "target": "mapping:m_q4:sorter:"
+    },
+    {
+      "relation": "contains",
+      "properties": {
+        "source_context": {
+          "source_file_path": "/mnt/c/Users/Hicham/OneDrive/python/projects/mzcode/data/informatica/hassan-hosny/Q4/wf_m_q4.XML",
+          "source_file_type": "xml",
+          "technology": "Informatica",
+          "xml_path": "//INSTANCE[@INSTANCENAME='']",
+          "line_number": 84
+        }
+      },
+      "source": "mapping:m_q4",
+      "target": "mapping:m_q4:sequence_generator:"
+    },
+    {
+      "relation": "reads_from",
+      "properties": {
+        "relationship": "source_qualifier_reads_from_source",
+        "associated_source_instance": "Churn_Modelling3",
+        "derivation_method": "xml_metadata",
+        "confidence_level": "high",
+        "source_context": {
+          "source_file_path": "/mnt/c/Users/Hicham/OneDrive/python/projects/mzcode/data/informatica/hassan-hosny/Q4/wf_m_q4.XML",
+          "source_file_type": "xml",
+          "technology": "Informatica",
+          "xml_path": "//INSTANCE[@INSTANCENAME='SQ_Churn_Modelling3']",
+          "line_number": 79
+        }
+      },
+      "source": "mapping:m_q4:source_qualifier:SQ_Churn_Modelling3",
+      "target": "data_asset:source:Churn_Modelling3"
+    }
+  ]
+}
