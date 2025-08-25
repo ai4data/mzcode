@@ -620,6 +620,16 @@ def ingest_n_index(
     is_flag=True,
     help="Enable LLM enrichment of nodes with business summaries.",
 )
+@click.option(
+    "--provider",
+    default="openai",
+    help="LLM provider to use when --enable-llm is set (openai, openrouter).",
+)
+@click.option(
+    "--model",
+    default=None,
+    help="LLM model to use when --enable-llm is set (e.g., gpt-4o-mini, deepseek/deepseek-chat).",
+)
 @database_option
 def full(
     path: str,
@@ -628,6 +638,8 @@ def full(
     project_id: Optional[str],
     verbose: bool,
     enable_llm: bool,
+    provider: str,
+    model: Optional[str],
     database: Optional[str],
     memgraph_host: Optional[str],
     memgraph_port: Optional[int],
@@ -755,7 +767,11 @@ def full(
             config.enable_llm_enrichment = True
             
             # Initialize and run enrichment pipeline
-            enrichment_pipeline = EnrichmentPipeline(graph_client)
+            enrichment_pipeline = EnrichmentPipeline(
+                graph_client, 
+                provider=provider, 
+                model=model
+            )
             
             # Validate configuration before running
             validation = enrichment_pipeline.validate_configuration()
@@ -775,12 +791,15 @@ def full(
                 enrichment_results = enrichment_pipeline.enrich_graph()
                 
                 if enrichment_results["status"] == "completed":
-                    summary = enrichment_results["summary"]
+                    nodes_summary = enrichment_results["nodes"]
+                    edges_summary = enrichment_results["edges"]
                     click.echo(f"LLM Enrichment complete:")
-                    click.echo(f"   Nodes processed: {summary['total_nodes']}")
-                    click.echo(f"   Successfully enriched: {summary['successfully_enriched']}")
-                    click.echo(f"   Failed: {summary['failed']}")
-                    click.echo(f"   Success rate: {summary['success_rate']:.1f}%")
+                    click.echo(f"   Nodes processed: {nodes_summary['total_nodes']}")
+                    click.echo(f"   Successfully enriched: {nodes_summary['successfully_enriched']}")
+                    click.echo(f"   Failed: {nodes_summary['failed']}")
+                    click.echo(f"   Success rate: {nodes_summary['success_rate']:.1f}%")
+                    if edges_summary['semantic_edges'] > 0:
+                        click.echo(f"   Edges enriched: {edges_summary['successfully_enriched']}/{edges_summary['semantic_edges']}")
                     
                     if "token_usage" in enrichment_results:
                         tokens = enrichment_results["token_usage"]
@@ -985,6 +1004,16 @@ def full(
     help="Comma-separated list of node types to enrich (operation, pipeline).",
 )
 @click.option(
+    "--provider",
+    default="openai",
+    help="LLM provider to use (openai, openrouter).",
+)
+@click.option(
+    "--model",
+    default=None,
+    help="LLM model to use (e.g., gpt-4o-mini, deepseek/deepseek-chat).",
+)
+@click.option(
     "--verbose",
     "-v",
     is_flag=True,
@@ -995,6 +1024,8 @@ def enrich(
     path: str,
     force: bool,
     node_types: str,
+    provider: str,
+    model: Optional[str],
     verbose: bool,
     database: Optional[str],
     memgraph_host: Optional[str],
@@ -1081,7 +1112,11 @@ def enrich(
         config.enable_llm_enrichment = True
         
         # Initialize enrichment pipeline
-        enrichment_pipeline = EnrichmentPipeline(graph_client)
+        enrichment_pipeline = EnrichmentPipeline(
+            graph_client, 
+            provider=provider, 
+            model=model
+        )
         
         # Validate configuration
         validation = enrichment_pipeline.validate_configuration()
@@ -1102,14 +1137,17 @@ def enrich(
         
         # Display results
         if enrichment_results["status"] == "completed":
-            summary = enrichment_results["summary"]
+            nodes_summary = enrichment_results["nodes"]
+            edges_summary = enrichment_results["edges"]
             click.echo("")
             click.echo("✅ LLM Enrichment completed successfully!")
-            click.echo(f"   Nodes processed: {summary['total_nodes']}")
-            click.echo(f"   Successfully enriched: {summary['successfully_enriched']}")
-            click.echo(f"   Failed: {summary['failed']}")
-            click.echo(f"   Skipped: {summary['skipped']}")
-            click.echo(f"   Success rate: {summary['success_rate']:.1f}%")
+            click.echo(f"   Nodes processed: {nodes_summary['total_nodes']}")
+            click.echo(f"   Successfully enriched: {nodes_summary['successfully_enriched']}")
+            click.echo(f"   Failed: {nodes_summary['failed']}")
+            click.echo(f"   Skipped: {nodes_summary['skipped']}")
+            click.echo(f"   Success rate: {nodes_summary['success_rate']:.1f}%")
+            if edges_summary['semantic_edges'] > 0:
+                click.echo(f"   Edges enriched: {edges_summary['successfully_enriched']}/{edges_summary['semantic_edges']}")
             
             if "token_usage" in enrichment_results:
                 tokens = enrichment_results["token_usage"]
@@ -1130,12 +1168,24 @@ def enrich(
 @click.option("--path", default=".", help="The path to the project directory.")
 @click.option("--output", default=None, help="Path to save analysis results.")
 @click.option("--enable-llm", is_flag=True, help="Enable LLM enrichment.")
+@click.option(
+    "--provider",
+    default="openai",
+    help="LLM provider to use when --enable-llm is set (openai, openrouter).",
+)
+@click.option(
+    "--model",
+    default=None,
+    help="LLM model to use when --enable-llm is set (e.g., gpt-4o-mini, deepseek/deepseek-chat).",
+)
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose logging.")
 @database_option
 def complete(
     path: str,
     output: Optional[str],
     enable_llm: bool,
+    provider: str,
+    model: Optional[str],
     verbose: bool,
     database: Optional[str],
     memgraph_host: Optional[str],

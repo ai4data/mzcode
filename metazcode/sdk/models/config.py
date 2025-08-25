@@ -120,6 +120,16 @@ class MetaZenseConfig(BaseModel):
     )
     
     @classmethod
+    def _get_llm_api_key(cls, provider: str) -> Optional[str]:
+        """Get API key for the specified provider."""
+        provider_keys = {
+            "openai": "OPENAI_API_KEY",
+            "anthropic": "ANTHROPIC_API_KEY", 
+            "openrouter": "OPENROUTER_API_KEY"
+        }
+        return os.getenv(provider_keys.get(provider.lower(), "OPENAI_API_KEY"))
+    
+    @classmethod
     def from_environment(cls) -> "MetaZenseConfig":
         """Create configuration from environment variables."""
         return cls(
@@ -130,7 +140,7 @@ class MetaZenseConfig(BaseModel):
             enable_llm_enrichment=os.getenv("METAZCODE_ENABLE_LLM_ENRICHMENT", "false").lower() == "true",
             llm_provider=os.getenv("METAZCODE_LLM_PROVIDER", "openai"),
             llm_model=os.getenv("METAZCODE_LLM_MODEL", "gpt-4o-mini"),
-            llm_api_key=os.getenv("OPENAI_API_KEY") or os.getenv("ANTHROPIC_API_KEY") or os.getenv("OPENROUTER_API_KEY"),
+            llm_api_key=cls._get_llm_api_key(os.getenv("METAZCODE_LLM_PROVIDER", "openai")),
             llm_batch_size=int(os.getenv("METAZCODE_LLM_BATCH_SIZE", "10")),
             llm_max_retries=int(os.getenv("METAZCODE_LLM_MAX_RETRIES", "3")),
             llm_timeout=int(os.getenv("METAZCODE_LLM_TIMEOUT", "30"))

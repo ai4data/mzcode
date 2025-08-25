@@ -125,6 +125,20 @@ class NetworkXGraphClient(GraphClientInterface):
         """Returns the total number of edges in the graph."""
         return self._graph.number_of_edges()
 
+    def get_all_edges(self) -> List[Edge]:
+        """Retrieves all edges from the graph."""
+        edges = []
+        for source, target, data in self._graph.edges(data=True):
+            edges.append(
+                Edge(
+                    source_id=source,
+                    target_id=target,
+                    relation=data.get("relation", "unknown"),
+                    properties=data
+                )
+            )
+        return edges
+
     def get_graph(self) -> nx.DiGraph:
         """Returns the underlying NetworkX graph object."""
         return self._graph

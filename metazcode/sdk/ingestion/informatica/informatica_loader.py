@@ -42,23 +42,23 @@ class InformaticaLoader(IngestionTool):
         """
         # Parse connection files first to build connection context
         connections_context = self._parse_connection_files()
-        logger.info(
-            f"Found {len(connections_context)} Informatica connection(s) for enrichment."
-        )
+        if connections_context:
+            logger.info(f"Found {len(connections_context)} Informatica connection(s) for enrichment.")
 
         # Parse parameter files to build parameter context
         parameters_context = self._parse_parameter_files()
-        logger.info(
-            f"Found {len(parameters_context)} Informatica parameter(s) for enrichment."
-        )
+        if parameters_context:
+            logger.info(f"Found {len(parameters_context)} Informatica parameter(s) for enrichment.")
 
         # Create connection nodes from parsed connections
         connection_nodes = self._create_connection_nodes_from_context(connections_context)
-        logger.info(f"Created {len(connection_nodes)} Informatica connection node(s).")
+        if connection_nodes:
+            logger.info(f"Created {len(connection_nodes)} Informatica connection node(s).")
 
         # Create parameter nodes from parsed parameters
         parameter_nodes = self._create_parameter_nodes_from_context(parameters_context)
-        logger.info(f"Created {len(parameter_nodes)} Informatica parameter node(s).")
+        if parameter_nodes:
+            logger.info(f"Created {len(parameter_nodes)} Informatica parameter node(s).")
 
         # Create parser with both connection and parameter contexts
         parser = CanonicalInformaticaParser(
@@ -68,7 +68,11 @@ class InformaticaLoader(IngestionTool):
         
         # Discover workflow files using common Informatica patterns
         workflow_files = self._discover_workflow_files()
-        logger.info(f"Found {len(workflow_files)} Informatica workflow file(s).")
+        if workflow_files:
+            logger.info(f"Found {len(workflow_files)} Informatica workflow file(s).")
+        else:
+            # Only log at debug level if no Informatica files found
+            logger.debug("No Informatica workflow files discovered in the project.")
 
         # Yield connection and parameter nodes first if any exist
         all_global_nodes = connection_nodes + parameter_nodes

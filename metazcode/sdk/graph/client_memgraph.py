@@ -337,6 +337,32 @@ class MemgraphClient(GraphClientInterface):
         result = self._execute_query(query)
         return result[0][0] if result else 0
 
+    def get_all_edges(self) -> List[Edge]:
+        """Retrieves all edges from the database."""
+        query = """
+        MATCH (source)-[r]->(target) 
+        RETURN source.id as source_id, target.id as target_id, type(r) as relation, properties(r) as props
+        """
+        result = self._execute_query(query)
+        
+        edges = []
+        for row in result:
+            source_id, target_id, relation, props = row
+            
+            # Convert Cypher properties to dictionary
+            properties = dict(props) if props else {}
+            
+            edges.append(
+                Edge(
+                    source_id=source_id,
+                    target_id=target_id,
+                    relation=relation,
+                    properties=properties
+                )
+            )
+        
+        return edges
+
     def get_graph(self):
         """
         Returns a representation of the graph.

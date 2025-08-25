@@ -24,27 +24,23 @@ class SsisLoader(IngestionTool):
         """
         # Parse connection managers first to build context
         connections_context = self._parse_connection_managers()
-        logger.info(
-            f"Found {len(connections_context)} connection manager(s) for enrichment."
-        )
+        if connections_context:
+            logger.info(f"Found {len(connections_context)} connection manager(s) for enrichment.")
 
         # Parse project parameters to build parameter context
         parameters_context = self._parse_project_parameters()
-        logger.info(
-            f"Found {len(parameters_context)} project parameter(s) for enrichment."
-        )
+        if parameters_context:
+            logger.info(f"Found {len(parameters_context)} project parameter(s) for enrichment.")
 
         # Create connection nodes from .conmgr files
-        connection_nodes = self._create_connection_nodes_from_context(
-            connections_context
-        )
-        logger.info(
-            f"Created {len(connection_nodes)} connection node(s) from .conmgr files."
-        )
+        connection_nodes = self._create_connection_nodes_from_context(connections_context)
+        if connection_nodes:
+            logger.info(f"Created {len(connection_nodes)} connection node(s) from .conmgr files.")
 
         # Create parameter nodes from project parameters
         parameter_nodes = self._create_parameter_nodes_from_context(parameters_context)
-        logger.info(f"Created {len(parameter_nodes)} project parameter node(s).")
+        if parameter_nodes:
+            logger.info(f"Created {len(parameter_nodes)} project parameter node(s).")
 
         # Create parser with connection and parameter contexts
         parser = CanonicalSsisParser(
@@ -52,7 +48,11 @@ class SsisLoader(IngestionTool):
             parameters_context=parameters_context,
         )
         ssis_files = self.discover_files("*.dtsx")
-        logger.info(f"Found {len(ssis_files)} SSIS package file(s).")
+        if ssis_files:
+            logger.info(f"Found {len(ssis_files)} SSIS package file(s).")
+        else:
+            # Only log at debug level if no SSIS files found
+            logger.debug("No SSIS package files discovered in the project.")
 
         # Yield connection and parameter nodes first if any exist
         all_global_nodes = connection_nodes + parameter_nodes
