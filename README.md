@@ -30,12 +30,26 @@ uv run python -m metazcode full --path "path/to/your/ssis/project"
 ```
 
 ### 3. Optional: Enable AI-Powered Insights
+
+#### OpenAI (Default Provider)
 ```bash
 # Add your OpenAI API key for intelligent business summaries
 echo "OPENAI_API_KEY=your_api_key_here" >> .env
 
-# Run analysis with AI enrichment
+# Run analysis with AI enrichment (uses OpenAI by default)
 uv run python -m metazcode full --path "path/to/your/project" --enable-llm
+```
+
+#### OpenRouter (Multi-Model Access)
+```bash
+# Add your OpenRouter API key (often more cost-effective)
+echo "OPENROUTER_API_KEY=your_api_key_here" >> .env
+
+# Use OpenRouter with DeepSeek (fast and cost-effective)
+uv run python -m metazcode full --path "path/to/your/project" --enable-llm --provider openrouter --model "deepseek/deepseek-chat"
+
+# Use OpenRouter with Claude (high quality)
+uv run python -m metazcode full --path "path/to/your/project" --enable-llm --provider openrouter --model "anthropic/claude-3.5-sonnet"
 ```
 
 ### 4. See Results
@@ -160,18 +174,95 @@ uv run python -m metazcode full --path "your/project" \
   --database memgraph --memgraph-host localhost --memgraph-port 7687
 ```
 
-### AI-Powered Analysis
+### AI-Powered Analysis (Multi-Provider Support)
+
+#### OpenAI Models
 ```bash
-# Enable LLM enrichment with business summaries
+# Default: GPT-4o-mini (fast and cost-effective)
 uv run python -m metazcode full --path "your/project" --enable-llm
 
-# Configure AI model (optional, defaults to gpt-4o-mini)
-OPENAI_MODEL=gpt-4o-mini uv run python -m metazcode full --path "your/project" --enable-llm
+# Explicit OpenAI with different models
+uv run python -m metazcode full --path "your/project" --enable-llm --provider openai --model gpt-4o-mini
+uv run python -m metazcode full --path "your/project" --enable-llm --provider openai --model gpt-4o
+uv run python -m metazcode full --path "your/project" --enable-llm --provider openai --model gpt-4
 
+# Using environment variables
+export OPENAI_API_KEY=your_openai_key
+export METAZCODE_LLM_PROVIDER=openai
+export METAZCODE_LLM_MODEL=gpt-4o-mini
+uv run python -m metazcode full --path "your/project" --enable-llm
+```
+
+#### OpenRouter (Access to Multiple Providers)
+```bash
+# DeepSeek (very cost-effective, high quality)
+uv run python -m metazcode full --path "your/project" --enable-llm \
+  --provider openrouter --model "deepseek/deepseek-chat"
+
+# Anthropic Claude (excellent reasoning)
+uv run python -m metazcode full --path "your/project" --enable-llm \
+  --provider openrouter --model "anthropic/claude-3.5-sonnet"
+
+# Meta Llama (open source)
+uv run python -m metazcode full --path "your/project" --enable-llm \
+  --provider openrouter --model "meta-llama/llama-3.1-8b-instruct"
+
+# Google Gemini (competitive performance)
+uv run python -m metazcode full --path "your/project" --enable-llm \
+  --provider openrouter --model "google/gemini-pro-1.5"
+
+# Using environment variables for OpenRouter
+export OPENROUTER_API_KEY=your_openrouter_key
+export OPENROUTER_SITE_URL=https://yoursite.com  # Optional: for OpenRouter rankings
+export OPENROUTER_SITE_NAME="YourProject"        # Optional: for OpenRouter rankings
+uv run python -m metazcode full --path "your/project" --enable-llm --provider openrouter
+```
+
+#### Advanced LLM Configuration
+```bash
 # Combine with database storage and custom output
 uv run python -m metazcode full --path "your/project" \
-  --enable-llm --output "ai_enhanced_analysis.json" \
-  --database memgraph
+  --enable-llm --provider openrouter --model "deepseek/deepseek-chat" \
+  --output "ai_enhanced_analysis.json" --database memgraph
+
+# Environment variables for fine-tuning
+export METAZCODE_LLM_BATCH_SIZE=5      # Process 5 nodes at once (default: 10)
+export METAZCODE_LLM_MAX_RETRIES=3     # Retry failed requests 3 times
+export METAZCODE_LLM_TIMEOUT=30        # 30 second timeout per request
+```
+
+#### 💰 Cost & Performance Comparison
+
+| Provider | Model | Cost* | Speed | Quality | Best For |
+|----------|-------|-------|-------|---------|-----------|
+| OpenAI | gpt-4o-mini | $$ | ⚡⚡⚡ | ⭐⭐⭐⭐ | Default choice, balanced |
+| OpenRouter | deepseek/deepseek-chat | $ | ⚡⚡⚡ | ⭐⭐⭐⭐⭐ | Cost-effective, high quality |
+| OpenRouter | anthropic/claude-3.5-sonnet | $$$$ | ⚡⚡ | ⭐⭐⭐⭐⭐ | Premium quality |
+| OpenRouter | meta-llama/llama-3.1-8b | $ | ⚡⚡⚡ | ⭐⭐⭐⭐ | Open source, budget |
+
+*Relative cost for ~100 operations: $ = <$0.50, $$ = $0.50-$2.00, $$$$ = $5.00+
+
+#### 🎯 Model Recommendations
+
+**For Development/Testing:**
+```bash
+# DeepSeek - Excellent quality at lowest cost
+uv run python -m metazcode full --path "your/project" --enable-llm \
+  --provider openrouter --model "deepseek/deepseek-chat"
+```
+
+**For Production:**
+```bash
+# OpenAI GPT-4o-mini - Reliable, well-tested
+uv run python -m metazcode full --path "your/project" --enable-llm \
+  --provider openai --model gpt-4o-mini
+```
+
+**For Premium Quality:**
+```bash
+# Claude 3.5 Sonnet - Best reasoning for complex ETL logic
+uv run python -m metazcode full --path "your/project" --enable-llm \
+  --provider openrouter --model "anthropic/claude-3.5-sonnet"
 ```
 
 ## ❓ FAQ
