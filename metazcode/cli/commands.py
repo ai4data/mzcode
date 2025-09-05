@@ -269,7 +269,7 @@ def dump(
         graph_client=graph_client, root_path=root_path, target_file=target_file
     )
     orchestrator.run()
-    click.echo("====================== Ingestion Complete ======================")
+    click.echo("====================== Ingestion Complete =====================")
     click.echo("")
 
     graph = graph_client.get_graph()
@@ -299,7 +299,7 @@ def dump(
         click.echo(f"[SUCCESS] Graph data saved to {output_path.resolve()}")
     else:
         # Print to console (existing behavior)
-        click.echo("--- NODES ---")
+        click.echo("---")
         for node_id, data in graph.nodes(data=True):
             click.echo(f"ID: {node_id}")
             for key, value in data.items():
@@ -702,6 +702,10 @@ def full(
             )
 
         graph_client = GraphClientBuilder.get_client(db_config)
+
+        if db_config.backend == "memgraph":
+            click.echo("Clearing existing Memgraph graph for a clean run...")
+            graph_client.clear_graph()
         orchestrator = Orchestrator(
             graph_client=graph_client, root_path=root_path, target_file=target_file
         )
@@ -720,6 +724,10 @@ def full(
 
         analyzer = CrossPackageAnalyzer(graph_client)
         analysis_results = analyzer.analyze()
+
+        # Persist the analysis results back to the graph
+        if db_config.backend == "memgraph":
+            analyzer.persist_changes()
 
         final_nodes = graph_client.get_node_count()
         final_edges = graph_client.get_edge_count()
@@ -917,7 +925,8 @@ def full(
                     MATCH (source)-[r]->(target)
                     RETURN source.id as source_id, target.id as target_id, 
                            type(r) as relation_type, properties(r) as properties
-                """)
+                """
+                )
                 edge_results = cursor.fetchall()
                 
                 edges_data = []
@@ -1011,7 +1020,7 @@ def full(
 @click.option(
     "--model",
     default=None,
-    help="LLM model to use (e.g., gpt-4o-mini, deepseek/deepseek-chat).",
+    help="LLM model to use when --enable-llm is set (e.g., gpt-4o-mini, deepseek/deepseek-chat).",
 )
 @click.option(
     "--verbose",
@@ -1034,7 +1043,7 @@ def enrich(
     memgraph_password: Optional[str],
 ):
     """
-    Run LLM enrichment on an existing graph.
+    Run LLM enrichment on an existing graph. 
     
     This command adds AI-generated business summaries to SSIS operations and
     pipelines, enriching the graph with human-readable context for migration
@@ -1222,3 +1231,42 @@ def complete(
 
 if __name__ == "__main__":
     cli()
+
+@cli.command()
+@database_option
+def debug_graph(
+    database: Optional[str],
+    memgraph_host: Optional[str],
+    memgraph_port: Optional[int],
+    memgraph_username: Optional[str],
+    memgraph_password: Optional[str],
+):
+    """Dumps the reconstructed graph from Memgraph for debugging."""
+    click.echo("--- Starting Graph Debug ---")
+    db_config = get_database_config(
+        database, memgraph_host, memgraph_port, memgraph_username, memgraph_password
+    )
+    if db_config.backend != "memgraph":
+        click.echo("This command is only for the 'memgraph' backend.")
+        return
+
+    graph_client = GraphClientBuilder.get_client(db_config)
+    
+    from metazcode.sdk.analysis.cross_package_analyzer import CrossPackageAnalyzer
+    analyzer = CrossPackageAnalyzer(graph_client)
+
+    reconstructed_graph_path = Path("reconstructed_graph.json")
+    graph_data = nx.node_link_data(analyzer.graph)
+    with open(reconstructed_graph_path, "w") as f:
+        def default_serializer(o):
+            if isinstance(o, (set, tuple)):
+                return list(o)
+            if hasattr(o, "to_dict"):
+                return o.to_dict()
+            try:
+                return str(o)
+            except TypeError:
+                return repr(o)
+        json.dump(graph_data, f, indent=2, default=default_serializer)
+    click.echo(f"DEBUG: Saved reconstructed graph to {reconstructed_graph_path}")
+    click.echo("--- Graph Debug Finished ---")

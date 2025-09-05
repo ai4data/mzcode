@@ -93,7 +93,8 @@ class MemgraphClient(GraphClientInterface):
         """
         Adds or updates a node in the Memgraph database.
 
-        Uses MERGE to create or update the node with all its properties.
+        Uses MERGE to create or update the node with all its properties,
+        and applies a specific label based on the node's 'node_type'.
         """
         node_dict = node.to_dict()
         node_id = node_dict.pop("id")
@@ -106,17 +107,31 @@ class MemgraphClient(GraphClientInterface):
             else:
                 properties[key] = value
 
+        # --- Start of Proposed Change ---
+
+        # Default to 'Node' label, but prefer a specific type
+        node_type = properties.get("node_type", "Node").capitalize()
+        
+        # Sanitize label to ensure it's a valid Cypher identifier
+        import re
+        sanitized_label = re.sub(r'[^a-zA-Z0-9_]', '', node_type)
+        
+        # Create a multi-label string (e.g., :Pipeline:Node)
+        label_string = f":{sanitized_label}:Node"
+
         # Build property string for Cypher query
         if properties:
-            prop_string = ", ".join([f"{key}: ${key}" for key in properties.keys()])
-            query = f"""
-            MERGE (n:Node {{id: $node_id}})
-            SET n += {{{prop_string}}}
-            """
+            prop_string = ", ".join([f"n.{key} = ${key}" for key in properties.keys()])
+            query = f'''
+            MERGE (n {label_string} {{id: $node_id}})
+            SET {prop_string}
+            '''
         else:
-            query = f"""
-            MERGE (n:Node {{id: $node_id}})
-            """
+            query = f'''
+            MERGE (n {label_string} {{id: $node_id}})
+            '''
+        
+        # --- End of Proposed Change ---
 
         parameters = {"node_id": node_id, **properties}
         self._execute_query(query, parameters)
@@ -396,6 +411,13 @@ class MemgraphClient(GraphClientInterface):
             else:
                 # Method 4: Try to iterate over the node
                 props = dict(mg_node)
+                
+            # CRITICAL: Also extract LLM enrichment fields that may not be in the properties dict
+            # These fields are stored directly on the node in Memgraph
+            llm_fields = ["llm_summary", "llm_enriched_at", "llm_model"]
+            for field in llm_fields:
+                if hasattr(mg_node, field):
+                    props[field] = getattr(mg_node, field)
         except Exception as e:
             logger.warning(f"Failed to extract properties from mgclient.Node: {e}")
 
@@ -409,6 +431,9 @@ class MemgraphClient(GraphClientInterface):
                 "label",
                 "properties",
                 "context",
+                "llm_summary",
+                "llm_enriched_at", 
+                "llm_model",
             ]
             for prop in common_props:
                 try:
@@ -417,15 +442,52 @@ class MemgraphClient(GraphClientInterface):
                 except:
                     continue
 
+        # First, extract LLM enrichment fields before JSON parsing
+        llm_fields = {}
+        core_node_fields = ["node_id", "id", "node_type", "name", "context"]
+        
+        for llm_key in ["llm_summary", "llm_enriched_at", "llm_model"]:
+            if llm_key in props:
+                llm_fields[llm_key] = props[llm_key]
+        
+        # Separate core fields from properties that should go into the properties dict
+        core_data = {}
+        properties_data = {}
+        
         # Parse JSON properties back to objects
         for key, value in props.items():
-            if isinstance(value, str):
+            if key == "properties" and isinstance(value, str):
+                # Handle nested properties JSON separately
                 try:
-                    node_data[key] = json.loads(value)
+                    parsed_props = json.loads(value)
+                    properties_data.update(parsed_props)  # Add parsed properties to properties_data
                 except (json.JSONDecodeError, TypeError):
-                    node_data[key] = value  # Keep as string if not valid JSON
+                    properties_data[key] = value  # Keep as string if not valid JSON
+            elif key in core_node_fields:
+                # Core Node fields go to top level
+                if isinstance(value, str):
+                    try:
+                        core_data[key] = json.loads(value)
+                    except (json.JSONDecodeError, TypeError):
+                        core_data[key] = value
+                else:
+                    core_data[key] = value
+            elif key in llm_fields:
+                # LLM fields go into properties dict for the Node class
+                properties_data[key] = value
             else:
-                node_data[key] = value
+                # Other fields go into properties dict
+                if isinstance(value, str):
+                    try:
+                        properties_data[key] = json.loads(value)
+                    except (json.JSONDecodeError, TypeError):
+                        properties_data[key] = value
+                else:
+                    properties_data[key] = value
+        
+        # Combine core data with properties dict
+        node_data = core_data
+        node_data["properties"] = properties_data
 
         return node_data
 

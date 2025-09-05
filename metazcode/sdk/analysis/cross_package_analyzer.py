@@ -98,15 +98,9 @@ class CrossPackageAnalyzer:
         """Get all pipeline (package) nodes from the graph."""
         packages = []
         
-        # For Memgraph, we need to handle the case where cross-package analysis is limited
-        raw_graph = self.graph_client.get_graph()
-        if not isinstance(raw_graph, nx.DiGraph):
-            # Limited support for Memgraph - return empty packages for now
-            logger.warning("Limited cross-package analysis support for Memgraph backend")
-            return packages
-        
-        # Use NetworkX approach for full support
-        for node_id, node_data in raw_graph.nodes(data=True):
+        # The self.graph is initialized as a NetworkX graph in the constructor
+        # regardless of the backend, so we can use it directly.
+        for node_id, node_data in self.graph.nodes(data=True):
             if node_data.get('node_type') == 'pipeline':
                 packages.append({
                     'id': node_id,
@@ -123,9 +117,8 @@ class CrossPackageAnalyzer:
             return raw_graph
         
         # For Memgraph, create NetworkX graph from stored data
-        logger.warning("Limited cross-package analysis support for Memgraph backend")
+        logger.info("Building NetworkX graph from Memgraph data for analysis...")
         
-        # Create NetworkX graph from Memgraph data
         graph = nx.DiGraph()
         
         try:
@@ -134,27 +127,31 @@ class CrossPackageAnalyzer:
             for node in all_nodes:
                 node_dict = node.to_dict()
                 node_id = node_dict.get('id', node_dict.get('node_id'))
+                # The properties from memgraph are a json string, so we need to parse them
+                if isinstance(node_dict.get('properties'), str):
+                    try:
+                        node_dict['properties'] = json.loads(node_dict['properties'])
+                    except json.JSONDecodeError:
+                        logger.warning(f"Could not decode properties for node {node_id}")
                 graph.add_node(node_id, **node_dict)
             
-            # Get all edges via Cypher query
-            connection = self.graph_client.get_graph()
-            cursor = connection.cursor()
-            cursor.execute("""
-                MATCH (source)-[r]->(target)
-                RETURN source.id as source_id, target.id as target_id, 
-                       type(r) as relation_type, properties(r) as properties
-            """)
-            edge_results = cursor.fetchall()
-            
-            for source_id, target_id, relation_type, properties in edge_results:
-                edge_attrs = properties.copy() if properties else {}
-                edge_attrs['relation'] = relation_type
+            # Get all edges
+            all_edges = self.graph_client.get_all_edges()
+            for edge in all_edges:
+                edge_dict = edge.to_dict()
+                source_id = edge_dict.get('source_id')
+                target_id = edge_dict.get('target_id')
+                edge_attrs = edge_dict.get('properties', {})
+                relation = edge_dict.get('relation')
+                if relation:
+                    edge_attrs['relation'] = relation.lower()
                 graph.add_edge(source_id, target_id, **edge_attrs)
                 
         except Exception as e:
             logger.error(f"Failed to convert Memgraph data to NetworkX: {e}")
             return nx.DiGraph()
         
+        logger.info(f"Successfully built NetworkX graph with {graph.number_of_nodes()} nodes and {graph.number_of_edges()} edges.")
         return graph
     
     def _analyze_shared_tables(self, packages: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
@@ -461,12 +458,18 @@ class CrossPackageAnalyzer:
         return cross_package_edges
     
     def _add_cross_package_edges_to_graph(self, cross_package_edges: List[Edge]):
-        """Add cross-package edges to the graph."""
+        """Add cross-package edges to the local graph instance."""
         for edge in cross_package_edges:
-            try:
-                self.graph_client.write_edge(edge)
-            except Exception as e:
-                logger.warning(f"Failed to add cross-package edge {edge.source_id} -> {edge.target_id}: {e}")
+            edge_dict = edge.to_dict()
+            source_id = edge_dict.pop('source_id')
+            target_id = edge_dict.pop('target_id')
+            relation = edge_dict.pop('relation')
+            
+            # Mark edges as added by analysis to prevent duplication during persist
+            properties = edge_dict.get('properties', {})
+            properties['added_by_analysis'] = True
+            
+            self.graph.add_edge(source_id, target_id, relation=relation, added_by_analysis=True, **properties)
     
     def _update_package_properties(self, packages: List[Dict[str, Any]], 
                                  data_dependencies: List[Dict[str, Any]],
@@ -511,3 +514,37 @@ class CrossPackageAnalyzer:
                 
                 # Update the node in the graph
                 nx.set_node_attributes(self.graph, {package_id: {'properties': current_properties}})
+
+    def persist_changes(self):
+        """Persist the changes from the analysis back to the graph client."""
+        logger.info("Persisting analysis changes back to the graph...")
+
+        nodes_to_write = []
+        for node_id, data in self.graph.nodes(data=True):
+            # Ensure node_id is correctly passed to the Node model
+            if 'node_id' not in data:
+                data['node_id'] = data.pop('id', node_id)
+            
+            # Ensure all required fields are present
+            if 'name' not in data:
+                data['name'] = data.get('label', node_id) # Fallback for name
+            if 'node_type' not in data:
+                data['node_type'] = 'Unknown' # Fallback for node_type
+
+            nodes_to_write.append(Node(**data))
+
+        # IMPORTANT: Only persist NEW cross-package edges, not all edges
+        # This prevents duplicating existing edges that were already in the database
+        edges_to_write = []
+        for u, v, d in self.graph.edges(data=True):
+            # Only persist edges created by cross-package analysis
+            if d.get('added_by_analysis', False):
+                edges_to_write.append(Edge(source_id=u, target_id=v, relation=d.get('relation'), properties=d))
+
+        # Write nodes and edges back to the graph client
+        self.graph_client.add_nodes(nodes_to_write)
+        if edges_to_write:
+            self.graph_client.add_edges(edges_to_write)
+            logger.info(f"Persisted {len(nodes_to_write)} nodes and {len(edges_to_write)} NEW cross-package edges.")
+        else:
+            logger.info(f"Persisted {len(nodes_to_write)} nodes. No new cross-package edges to add.")
