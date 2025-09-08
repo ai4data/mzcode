@@ -46,3 +46,5 @@ class EdgeType(str, Enum):
     # SQL Semantic Types for Migration
     JOINS_WITH = "joins_with"
     ALIASES_AS = "aliases_as"
+    # Event Handler Types for SSIS
+    HANDLES_EVENT = "handles_event"
