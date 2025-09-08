@@ -45,6 +45,9 @@ class CanonicalSsisParser:
         # Initialize enhanced SQL parser for migration support
         self.sql_parser = EnhancedSqlParser()
         self._pending_sql_semantics = None
+        
+        # REQUIREMENT 2.2: Track conditional split components for precedence constraint enhancement
+        self._conditional_split_mapping = {}  # task_id -> {output_name -> condition_expression}
 
     def _categorize_operation_subtype(self, native_type: str) -> str:
         """
@@ -105,17 +108,7 @@ class CanonicalSsisParser:
         nodes: List[Node] = []
         edges: List[Edge] = []
 
-        # Parse connection managers first (local connections within .dtsx)
-        connection_nodes, connection_id_map = self._parse_connection_managers(
-            root, file_path
-        )
-        nodes.extend(connection_nodes)
-
-        # Add external connections from .conmgr context to the ID map
-        external_connection_map = self._build_external_connection_map()
-        connection_id_map.update(external_connection_map)
-
-        # Parse package parameters
+        # Parse package parameters first (needed for connection parameter resolution)
         parameter_nodes, parameter_id_map = self._parse_package_parameters(
             root, file_path
         )
@@ -127,6 +120,17 @@ class CanonicalSsisParser:
 
         # Combine parameter and variable mappings for reference tracking
         param_var_id_map = {**parameter_id_map, **variable_id_map}
+
+        # Parse connection managers with parameter resolution support
+        connection_nodes, connection_edges, connection_id_map = self._parse_connection_managers(
+            root, file_path, param_var_id_map
+        )
+        nodes.extend(connection_nodes)
+        edges.extend(connection_edges)
+
+        # Add external connections from .conmgr context to the ID map
+        external_connection_map = self._build_external_connection_map()
+        connection_id_map.update(external_connection_map)
 
         # Create the pipeline node
         package_name_elem = root.find(
@@ -270,24 +274,217 @@ class CanonicalSsisParser:
                     edges,
                     param_var_id_map,
                 )
+            elif "ForEachLoop" in task_type or "FOREACHLOOP" in task_type:
+                # REQUIREMENT 2.4: Parse Foreach Loop Container Logic
+                self._parse_foreach_loop_component(
+                    object_data_xml,
+                    task_id,
+                    nodes,
+                    edges,
+                    param_var_id_map,
+                    task_name,
+                )
             else:
                 logger.debug(
                     f"DEBUG: Unhandled task type: '{task_type}' for task: '{task_name}'"
                 )
+            
+            # REQUIREMENT 2.1: Apply file path parameter resolution to control flow tasks
+            self._apply_file_path_parameter_resolution(
+                object_data_xml,
+                task_type,
+                task_id,
+                nodes,
+                edges,
+                param_var_id_map
+            )
+
+            # REQUIREMENT 3.3: Parse Event Handlers for this task
+            self._parse_event_handlers(
+                task_xml,
+                task_id,
+                task_name,
+                pipeline_id,
+                nodes,
+                edges,
+                connection_id_map,
+                param_var_id_map,
+                file_path
+            )
 
         # Parse precedence constraints (control flow)
         self._parse_precedence_constraints(root, pipeline_id, edges)
 
         yield nodes, edges
 
+    def _parse_event_handlers(
+        self,
+        task_xml: etree._Element,
+        parent_task_id: str,
+        parent_task_name: str,
+        pipeline_id: str,
+        nodes: List[Node],
+        edges: List[Edge],
+        connection_id_map: Dict[str, str],
+        param_var_id_map: Dict[str, str],
+        file_path: str
+    ):
+        """
+        REQUIREMENT 3.3: Parse and model SSIS Event Handlers as distinct operations.
+        
+        Args:
+            task_xml: The task XML element to search for event handlers
+            parent_task_id: ID of the parent task
+            parent_task_name: Name of the parent task
+            pipeline_id: ID of the parent pipeline
+            nodes: List to append new nodes to
+            edges: List to append new edges to
+            connection_id_map: Mapping of connection IDs
+            param_var_id_map: Mapping of parameter/variable IDs
+            file_path: Path to the DTSX file
+        """
+        # Search for event handlers within the task
+        event_handlers = task_xml.findall(".//DTS:EventHandler", self.ns_map)
+        
+        for event_handler_xml in event_handlers:
+            event_type = event_handler_xml.get(f"{{{self.ns_map['DTS']}}}EventName")
+            
+            if not event_type:
+                continue
+            
+            # Create unique event handler operation ID
+            event_handler_id = f"{parent_task_id}:event_handler:{event_type}"
+            event_handler_name = f"{event_type}_Handler_for_{parent_task_name}"
+            
+            # Create event handler operation node
+            event_handler_properties = {
+                "native_type": "EventHandler",
+                "operation_subtype": "EVENT_HANDLER",
+                "event_type": event_type,
+                "parent_task": parent_task_name,
+                "parent_task_id": parent_task_id,
+                "technology": "SSIS",
+                **SourceContext.create_node_traceability(
+                    source_file_path=file_path,
+                    source_file_type="dtsx",
+                    xml_path=f"//DTS:Executable[@DTS:ObjectName='{parent_task_name}']//DTS:EventHandler[@DTS:EventName='{event_type}']",
+                    parent_package=os.path.basename(file_path).replace('.dtsx', '')
+                )
+            }
+            
+            nodes.append(Node(
+                node_id=event_handler_id,
+                node_type=NodeType.OPERATION,
+                name=event_handler_name,
+                properties=event_handler_properties,
+            ))
+            
+            logger.debug(f"Created event handler node: {event_handler_id} for event type: {event_type}")
+            
+            # Create HANDLES_EVENT edge from parent task to event handler
+            edge_properties = SourceContext.create_edge_traceability(
+                source_file_path=file_path,
+                derivation_method="event_handler_parsing",
+                xml_location=f"//DTS:EventHandler[@DTS:EventName='{event_type}']",
+                context_info={
+                    "event_type": event_type,
+                    "parent_task": parent_task_name,
+                    "handler_name": event_handler_name
+                }
+            )
+            
+            edges.append(Edge(
+                source_id=parent_task_id,
+                target_id=event_handler_id,
+                relation=EdgeType.HANDLES_EVENT,
+                properties=edge_properties
+            ))
+            
+            logger.debug(f"Created HANDLES_EVENT edge: {parent_task_id} -> {event_handler_id}")
+            
+            # Parse tasks within the event handler recursively
+            event_executables = event_handler_xml.find("DTS:Executables", self.ns_map)
+            if event_executables is not None:
+                for event_task_xml in event_executables.findall("DTS:Executable", self.ns_map):
+                    event_task_name = event_task_xml.get(f"{{{self.ns_map['DTS']}}}ObjectName")
+                    event_task_type = event_task_xml.get(f"{{{self.ns_map['DTS']}}}ExecutableType")
+                    
+                    if not event_task_name or not event_task_type:
+                        continue
+                    
+                    # Create nested event handler task ID
+                    nested_task_id = f"{event_handler_id}:operation:{event_task_name}"
+                    
+                    # Get operation subtype for the nested task
+                    operation_subtype = self._categorize_operation_subtype(event_task_type)
+                    
+                    # Create operation node for nested task within event handler
+                    nested_task_properties = {
+                        "native_type": event_task_type,
+                        "operation_subtype": operation_subtype,
+                        "technology": "SSIS",
+                        "event_handler_context": event_type,
+                        "parent_event_handler": event_handler_id,
+                        **SourceContext.create_node_traceability(
+                            source_file_path=file_path,
+                            source_file_type="dtsx",
+                            xml_path=f"//DTS:EventHandler[@DTS:EventName='{event_type}']//DTS:Executable[@DTS:ObjectName='{event_task_name}']",
+                            parent_package=os.path.basename(file_path).replace('.dtsx', '')
+                        )
+                    }
+                    
+                    nodes.append(Node(
+                        node_id=nested_task_id,
+                        node_type=NodeType.OPERATION,
+                        name=event_task_name,
+                        properties=nested_task_properties,
+                    ))
+                    
+                    # Create CONTAINS edge from event handler to nested task
+                    edges.append(Edge(
+                        source_id=event_handler_id,
+                        target_id=nested_task_id,
+                        relation=EdgeType.CONTAINS,
+                        properties={}
+                    ))
+                    
+                    logger.debug(f"Created nested event handler task: {nested_task_id} within {event_handler_id}")
+                    
+                    # Parse the nested task based on its type (simplified parsing)
+                    object_data_xml = event_task_xml.find("DTS:ObjectData", self.ns_map)
+                    if object_data_xml is not None:
+                        if "PipelineComponentData" in event_task_type:
+                            # This would be a data flow task within an event handler
+                            logger.debug(f"Found Data Flow task in event handler: {event_task_name}")
+                        elif "SqlTaskData" in event_task_type:
+                            # SQL task within event handler
+                            self._parse_execute_sql_task(
+                                object_data_xml,
+                                nested_task_id,
+                                nodes,
+                                edges,
+                                connection_id_map,
+                                param_var_id_map,
+                            )
+                        elif "ScriptTaskData" in event_task_type:
+                            # Script task within event handler
+                            self._parse_script_task(
+                                object_data_xml,
+                                nested_task_id,
+                                nodes,
+                                edges,
+                                param_var_id_map,
+                            )
+
     def _parse_connection_managers(
-        self, root: etree._Element, file_path: str
-    ) -> Tuple[List[Node], Dict[str, str]]:
+        self, root: etree._Element, file_path: str, param_var_id_map: Dict[str, str]
+    ) -> Tuple[List[Node], List[Edge], Dict[str, str]]:
         connection_nodes: List[Node] = []
+        connection_edges: List[Edge] = []
         id_map: Dict[str, str] = {}
         connections_container = root.find("DTS:ConnectionManagers", self.ns_map)
         if connections_container is None:
-            return [], {}
+            return [], [], {}
 
         for conn_xml in connections_container.findall(
             "DTS:ConnectionManager", self.ns_map
@@ -328,18 +525,36 @@ class CanonicalSsisParser:
                 )
 
             if enrichment_data:
-                # Merge enrichment properties
+                # REQUIREMENT 2.1: Apply parameter resolution to connection string
+                connection_string = enrichment_data.get("connection_string", "")
+                resolved_connection_info = {}
+                
+                if connection_string:
+                    # Check if connection string contains parameter expressions
+                    resolution_result = self._resolve_expression_with_parameters(
+                        connection_string, self.param_var_id_map
+                    )
+                    
+                    # Store both original and resolved connection strings
+                    resolved_connection_info = {
+                        "original_connection_string": connection_string,
+                        "resolved_connection_string": resolution_result.get("resolved_expression", connection_string),
+                        "connection_string": resolution_result.get("resolved_expression", connection_string),  # Use resolved as effective
+                        "connection_parameter_resolution": resolution_result if resolution_result.get("uses_parameters") or resolution_result.get("uses_variables") else None
+                    }
+                else:
+                    resolved_connection_info = {"connection_string": ""}
+                
+                # Merge enrichment properties with parameter resolution
                 properties.update(
                     {
                         "server": enrichment_data.get("server", ""),
                         "database": enrichment_data.get("database", ""),
                         "provider": enrichment_data.get("provider", ""),
                         "security": enrichment_data.get("security", ""),
-                        "connection_string": enrichment_data.get(
-                            "connection_string", ""
-                        ),
                         "creation_name": enrichment_data.get("creation_name", ""),
                         "conmgr_file": enrichment_data.get("file_path", ""),
+                        **resolved_connection_info
                     }
                 )
                 
@@ -365,9 +580,23 @@ class CanonicalSsisParser:
                     properties=properties,
                 )
             )
+            
+            # REQUIREMENT 2.1: Create parameter/variable edges for connection string dependencies
+            if enrichment_data and resolved_connection_info.get("connection_parameter_resolution"):
+                resolution_result = resolved_connection_info["connection_parameter_resolution"]
+                self._create_parameter_variable_edges(
+                    expression_result=resolution_result,
+                    source_node_id=conn_id,
+                    param_var_id_map=param_var_id_map,
+                    edges=connection_edges,
+                    property_name="ConnectionString",
+                    component_name=conn_name
+                )
+                logger.debug(f"Created parameter/variable edges for connection: {conn_name}")
+                
             id_map[conn_guid] = conn_id
 
-        return connection_nodes, id_map
+        return connection_nodes, connection_edges, id_map
 
     def _build_external_connection_map(self) -> Dict[str, str]:
         """
@@ -423,6 +652,16 @@ class CanonicalSsisParser:
         elif "Microsoft.OLEDBCommand" in class_id:
             self._parse_oledb_command_component(
                 component_xml, task_id, nodes, edges, connection_id_map, param_var_id_map, file_path
+            )
+        elif "Microsoft.MergeJoin" in class_id:
+            # REQUIREMENT 3.4: Parse Merge Join components with semantic details
+            self._parse_merge_join_component(
+                component_xml, task_id, nodes, edges, param_var_id_map
+            )
+        elif "Microsoft.DataConversion" in class_id:
+            # REQUIREMENT 3.4: Parse Data Conversion components with migration risk assessment
+            self._parse_data_conversion_component(
+                component_xml, task_id, nodes, edges, param_var_id_map
             )
         elif "OLEDBSource" in class_id or "OLEDBDestination" in class_id:
             self._parse_oledb_component(
@@ -666,6 +905,24 @@ class CanonicalSsisParser:
                     operation_node.properties["conditions"] = []
                 operation_node.properties["conditions"].extend(conditions)
 
+                # REQUIREMENT 2.2: Build mapping for conditional split output paths
+                if task_id not in self._conditional_split_mapping:
+                    self._conditional_split_mapping[task_id] = {}
+                
+                for condition in conditions:
+                    output_name = condition["output_name"]
+                    if condition.get("is_default", False):
+                        expression = "DEFAULT_OUTPUT"
+                    else:
+                        expression = condition.get("friendly_expression", condition.get("expression", ""))
+                    
+                    self._conditional_split_mapping[task_id][output_name] = {
+                        "condition_expression": expression,
+                        "evaluation_order": condition.get("evaluation_order", 0),
+                        "description": condition.get("description", ""),
+                        "is_default": condition.get("is_default", False)
+                    }
+
                 logger.debug(
                     f"Added {len(conditions)} conditional split conditions to {task_id}"
                 )
@@ -793,8 +1050,26 @@ class CanonicalSsisParser:
             # First, check for SQL commands and process ALL tables from them
             sql_command_prop = properties_tag.find("property[@name='SqlCommand']")
             if sql_command_prop is not None and sql_command_prop.text and "SELECT" in sql_command_prop.text.upper():
+                # REQUIREMENT 3.2: Resolve parameter and variable dependencies in SQL command
+                expression_result = self._resolve_expression_with_parameters(
+                    sql_command_prop.text, param_var_id_map
+                )
+                
+                # Create parameter/variable edges if dependencies found
+                component_name = component_xml.get("name", "")
+                self._create_parameter_variable_edges(
+                    expression_result=expression_result,
+                    source_node_id=task_id,
+                    param_var_id_map=param_var_id_map,
+                    edges=edges,
+                    property_name="SqlCommand",
+                    component_name=component_name
+                )
+                
                 # Parse complete SQL semantics for migration support
-                sql_semantics = self.sql_parser.parse_sql_semantics(sql_command_prop.text)
+                # Use resolved expression if parameters were found, otherwise original
+                sql_to_parse = expression_result.get("resolved_expression", sql_command_prop.text)
+                sql_semantics = self.sql_parser.parse_sql_semantics(sql_to_parse)
                 
                 # Use tables from SQL semantics instead of old regex method
                 if sql_semantics and sql_semantics.tables:
@@ -1500,11 +1775,46 @@ class CanonicalSsisParser:
                     from_task_id in existing_task_ids
                     and to_task_id in existing_task_ids
                 ):
+                    # REQUIREMENT 2.2: Check if from_task contains conditional split logic
+                    edge_properties = {}
+                    
+                    # Look for conditional split mapping for the from_task
+                    if from_task_id in self._conditional_split_mapping:
+                        conditional_info = self._conditional_split_mapping[from_task_id]
+                        
+                        # For now, we'll add all conditional expressions as metadata
+                        # In a more advanced implementation, we could correlate specific output paths
+                        edge_properties["conditional_split_logic"] = {
+                            "has_conditions": True,
+                            "condition_count": len(conditional_info),
+                            "conditions": conditional_info
+                        }
+                        
+                        # Add the first non-default condition as the primary condition
+                        primary_condition = None
+                        default_condition = None
+                        
+                        for output_name, condition_data in conditional_info.items():
+                            if condition_data.get("is_default", False):
+                                default_condition = condition_data["condition_expression"]
+                            elif primary_condition is None:  # First non-default condition
+                                primary_condition = condition_data["condition_expression"]
+                        
+                        if primary_condition:
+                            edge_properties["primary_condition_expression"] = primary_condition
+                        if default_condition:
+                            edge_properties["default_condition_expression"] = default_condition
+                        
+                        logger.debug(
+                            f"Enhanced PRECEDES edge with conditional split logic: {from_task_id} -> {to_task_id}"
+                        )
+                    
                     edges.append(
                         Edge(
                             source_id=from_task_id,
                             target_id=to_task_id,
                             relation=EdgeType.PRECEDES,
+                            properties=edge_properties
                         )
                     )
                     logger.debug(
@@ -1518,7 +1828,7 @@ class CanonicalSsisParser:
     def _extract_task_name_from_ref(self, task_ref: str) -> str:
         """
         Extract task name from SSIS task reference format.
-        Handles formats like "Package\TaskName" or just "TaskName"
+        Handles formats like "Package\\TaskName" or just "TaskName"
         """
         if "\\" in task_ref:
             return task_ref.split("\\")[-1]
@@ -1834,6 +2144,248 @@ class CanonicalSsisParser:
                     f"and {len(lookup_info['output_columns'])} output columns to {task_id}"
                 )
 
+        # REQUIREMENT 3.1: Create explicit READS_FROM edges for lookup tables
+        if lookup_info.get("reference_table"):
+            # Generate table ID and create table node if it doesn't exist
+            schema = lookup_info.get("reference_schema", "dbo")
+            table_name = lookup_info["reference_table"]
+            table_id = f"table:{schema}.{table_name}"
+            
+            # Check if table node already exists
+            existing_table = next((n for n in nodes if n.node_id == table_id), None)
+            if not existing_table:
+                # Create table/data_asset node for the lookup table
+                table_properties = {
+                    "schema": schema,
+                    "table_name": table_name,
+                    "full_name": f"{schema}.{table_name}",
+                    "asset_type": "lookup_table",
+                    "lookup_sql_command": lookup_info["sql_command"]
+                }
+                
+                nodes.append(Node(
+                    node_id=table_id,
+                    node_type=NodeType.DATA_ASSET,
+                    name=f"{schema}.{table_name}",
+                    properties=table_properties,
+                ))
+                
+                logger.debug(f"Created lookup table node: {table_id}")
+            
+            # Create READS_FROM edge from operation to lookup table
+            edge_properties = SourceContext.create_edge_traceability(
+                source_file_path=getattr(self, 'file_path', ''),
+                derivation_method="lookup_component_parsing",
+                xml_location=f"//pipeline/component[@name='{component_name}']",
+                context_info={
+                    "lookup_component": component_name,
+                    "sql_command": lookup_info["sql_command"],
+                    "join_conditions": lookup_info["join_conditions"],
+                    "component_type": "Lookup Transformation"
+                }
+            )
+            
+            edges.append(Edge(
+                source_id=task_id,
+                target_id=table_id,
+                relation=EdgeType.READS_FROM,
+                properties=edge_properties
+            ))
+            
+            logger.debug(f"Created READS_FROM edge: {task_id} -> {table_id} (lookup table)")
+            
+            # Update lookup info with the created table ID for reference
+            lookup_info["lookup_table_id"] = table_id
+
+    def _parse_merge_join_component(
+        self,
+        component_xml: etree._Element,
+        task_id: str,
+        nodes: List[Node],
+        edges: List[Edge],
+        param_var_id_map: Dict[str, str],
+    ):
+        """
+        REQUIREMENT 3.4: Parse Microsoft.MergeJoin transformation components 
+        to extract join type and join keys.
+        """
+        component_name = component_xml.get("name", "")
+        logger.debug(f"Parsing merge join component: {component_name}")
+
+        properties_tag = component_xml.find("properties")
+        if properties_tag is None:
+            return
+
+        merge_join_info = {
+            "component_name": component_name,
+            "join_type": "Inner Join",  # Default
+            "join_keys": [],
+            "left_input": None,
+            "right_input": None
+        }
+
+        # Extract join type
+        join_type_prop = properties_tag.find("property[@name='JoinType']")
+        if join_type_prop is not None and join_type_prop.text:
+            join_type_value = int(join_type_prop.text)
+            join_type_map = {
+                0: "Inner Join",
+                1: "Left Outer Join", 
+                2: "Full Outer Join"
+            }
+            merge_join_info["join_type"] = join_type_map.get(join_type_value, "Inner Join")
+
+        # Extract input names and join keys
+        inputs_tag = component_xml.find("inputs")
+        if inputs_tag is not None:
+            inputs = list(inputs_tag.findall("input"))
+            
+            # Typically, merge join has two sorted inputs
+            for i, input_elem in enumerate(inputs):
+                input_name = input_elem.get("name", "")
+                
+                if i == 0:
+                    merge_join_info["left_input"] = input_name
+                elif i == 1:
+                    merge_join_info["right_input"] = input_name
+                
+                # Extract join keys from input columns
+                input_columns_tag = input_elem.find("inputColumns")
+                if input_columns_tag is not None:
+                    for input_column in input_columns_tag.findall("inputColumn"):
+                        column_name = input_column.get("cachedName", "")
+                        column_properties = input_column.find("properties")
+                        
+                        if column_properties is not None:
+                            # Check if this column is used for sorting/joining
+                            sort_key_prop = column_properties.find("property[@name='SortKeyPosition']")
+                            if sort_key_prop is not None and sort_key_prop.text and int(sort_key_prop.text) > 0:
+                                join_key_info = {
+                                    "column_name": column_name,
+                                    "input_name": input_name,
+                                    "sort_key_position": int(sort_key_prop.text),
+                                    "input_index": i
+                                }
+                                merge_join_info["join_keys"].append(join_key_info)
+
+        # Sort join keys by position
+        merge_join_info["join_keys"].sort(key=lambda x: x["sort_key_position"])
+
+        # Store merge join info in the operation node properties
+        operation_node = next((n for n in nodes if n.node_id == task_id), None)
+        if operation_node:
+            # REQUIREMENT 3.4: Add join_type and join_keys to properties
+            operation_node.properties["join_type"] = merge_join_info["join_type"]
+            operation_node.properties["join_keys"] = merge_join_info["join_keys"]
+            operation_node.properties["merge_join_details"] = merge_join_info
+            
+            logger.debug(
+                f"Added merge join metadata to {task_id}: "
+                f"join_type='{merge_join_info['join_type']}', "
+                f"join_keys_count={len(merge_join_info['join_keys'])}"
+            )
+
+    def _parse_data_conversion_component(
+        self,
+        component_xml: etree._Element,
+        task_id: str,
+        nodes: List[Node],
+        edges: List[Edge],
+        param_var_id_map: Dict[str, str],
+    ):
+        """
+        REQUIREMENT 3.4: Parse Microsoft.DataConversion transformation components
+        to assess migration risk using SSISDataTypeMapper.
+        """
+        component_name = component_xml.get("name", "")
+        logger.debug(f"Parsing data conversion component: {component_name}")
+
+        conversion_info = {
+            "component_name": component_name,
+            "conversions": [],
+            "overall_migration_risk": "low"
+        }
+
+        # Extract output columns to find conversions
+        outputs_tag = component_xml.find("outputs")
+        if outputs_tag is not None:
+            for output in outputs_tag.findall("output"):
+                if output.get("isErrorOut") == "true":
+                    continue
+                    
+                output_columns_tag = output.find("outputColumns")
+                if output_columns_tag is not None:
+                    for output_column in output_columns_tag.findall("outputColumn"):
+                        column_name = output_column.get("name", "")
+                        data_type = output_column.get("dataType", "")
+                        length = output_column.get("length", "")
+                        precision = output_column.get("precision", "")
+                        scale = output_column.get("scale", "")
+                        
+                        # Check column properties for source lineage
+                        column_properties = output_column.find("properties")
+                        source_column = ""
+                        if column_properties is not None:
+                            source_prop = column_properties.find("property[@name='SourceColumn']")
+                            if source_prop is not None:
+                                source_column = source_prop.text or ""
+                        
+                        conversion_details = {
+                            "output_column": column_name,
+                            "source_column": source_column,
+                            "target_data_type": data_type,
+                            "length": length,
+                            "precision": precision,
+                            "scale": scale,
+                            "migration_risk": "low",
+                            "requires_review": False
+                        }
+                        
+                        # REQUIREMENT 3.4: Use SSISDataTypeMapper to assess conversion risk
+                        if self.enable_type_mapping and self.type_mapper and data_type:
+                            try:
+                                risk_assessment = self.type_mapper.assess_conversion_risk(
+                                    ssis_type=data_type,
+                                    length=length,
+                                    precision=precision,
+                                    scale=scale,
+                                    target_platforms=self.target_platforms
+                                )
+                                
+                                conversion_details["migration_risk"] = risk_assessment.get("risk_level", "low")
+                                conversion_details["requires_review"] = risk_assessment.get("requires_manual_review", False)
+                                conversion_details["risk_factors"] = risk_assessment.get("risk_factors", [])
+                                
+                            except Exception as e:
+                                logger.warning(f"Failed to assess conversion risk for {column_name}: {e}")
+                                conversion_details["migration_risk"] = "medium"
+                                conversion_details["requires_review"] = True
+                        
+                        conversion_info["conversions"].append(conversion_details)
+
+        # Determine overall migration risk
+        risk_levels = [conv.get("migration_risk", "low") for conv in conversion_info["conversions"]]
+        if "high" in risk_levels:
+            conversion_info["overall_migration_risk"] = "high"
+        elif "medium" in risk_levels:
+            conversion_info["overall_migration_risk"] = "medium"
+        
+        # Store conversion info in the operation node properties
+        operation_node = next((n for n in nodes if n.node_id == task_id), None)
+        if operation_node:
+            # REQUIREMENT 3.4: Add migration_risk flag to properties
+            operation_node.properties["migration_risk"] = conversion_info["overall_migration_risk"]
+            operation_node.properties["requires_review"] = any(
+                conv.get("requires_review", False) for conv in conversion_info["conversions"]
+            )
+            operation_node.properties["data_conversions"] = conversion_info
+            
+            logger.debug(
+                f"Added data conversion metadata to {task_id}: "
+                f"risk={conversion_info['overall_migration_risk']}, "
+                f"conversions_count={len(conversion_info['conversions'])}"
+            )
+
     def _extract_column_lineage(
         self,
         component_xml: etree._Element,
@@ -2072,6 +2624,495 @@ class CanonicalSsisParser:
                                 )
         
         return result
+
+    def _create_parameter_variable_edges(
+        self,
+        expression_result: Dict[str, Any],
+        source_node_id: str,
+        param_var_id_map: Dict[str, str],
+        edges: List[Edge],
+        property_name: str = "",
+        component_name: str = ""
+    ):
+        """
+        REQUIREMENT 3.2: Create edges for parameter and variable dependencies.
+        
+        Args:
+            expression_result: Result from _resolve_expression_with_parameters
+            source_node_id: ID of the node using the parameters/variables
+            param_var_id_map: Mapping of parameter/variable names to their IDs
+            edges: List to append new edges to
+            property_name: Name of the property containing the expression
+            component_name: Name of the component for traceability
+        """
+        # Create USES_PARAMETER edges
+        for param_name in expression_result.get("uses_parameters", []):
+            param_key = f"parameter:{param_name}"
+            if param_key in param_var_id_map:
+                param_node_id = param_var_id_map[param_key]
+                
+                edge_properties = SourceContext.create_edge_traceability(
+                    source_file_path=getattr(self, 'file_path', ''),
+                    derivation_method="expression_parameter_resolution",
+                    xml_location=f"//property[@name='{property_name}']" if property_name else "//expression",
+                    context_info={
+                        "parameter_name": param_name,
+                        "property_name": property_name,
+                        "component_name": component_name,
+                        "raw_expression": expression_result.get("raw_expression", ""),
+                        "resolved_expression": expression_result.get("resolved_expression", "")
+                    }
+                )
+                
+                edges.append(Edge(
+                    source_id=source_node_id,
+                    target_id=param_node_id,
+                    relation=EdgeType.USES_PARAMETER,
+                    properties=edge_properties
+                ))
+                
+                logger.debug(f"Created USES_PARAMETER edge: {source_node_id} -> {param_node_id} ({param_name})")
+        
+        # Create USES_VARIABLE edges  
+        for var_name in expression_result.get("uses_variables", []):
+            var_key = f"variable:{var_name}"
+            if var_key in param_var_id_map:
+                var_node_id = param_var_id_map[var_key]
+                
+                edge_properties = SourceContext.create_edge_traceability(
+                    source_file_path=getattr(self, 'file_path', ''),
+                    derivation_method="expression_variable_resolution",
+                    xml_location=f"//property[@name='{property_name}']" if property_name else "//expression",
+                    context_info={
+                        "variable_name": var_name,
+                        "property_name": property_name,
+                        "component_name": component_name,
+                        "raw_expression": expression_result.get("raw_expression", ""),
+                        "resolved_expression": expression_result.get("resolved_expression", "")
+                    }
+                )
+                
+                edges.append(Edge(
+                    source_id=source_node_id,
+                    target_id=var_node_id,
+                    relation=EdgeType.USES_VARIABLE,
+                    properties=edge_properties
+                ))
+                
+                logger.debug(f"Created USES_VARIABLE edge: {source_node_id} -> {var_node_id} ({var_name})")
+    
+    def _apply_file_path_parameter_resolution(
+        self, 
+        object_data_xml: etree._Element,
+        task_type: str,
+        task_id: str,
+        nodes: List[Node],
+        edges: List[Edge],
+        param_var_id_map: Dict[str, str]
+    ) -> None:
+        """
+        Apply parameter/variable resolution to file path properties for relevant task types.
+        
+        REQUIREMENT 2.1: Universal Application of Parameter/Variable Resolution
+        - File Paths: FileSystemTask, FlatFileSource, ExcelSource file paths
+        - Properties like Source, Destination, FilePath configured via expressions
+        """
+        if object_data_xml is None:
+            return
+            
+        # Define file path properties to check based on task type
+        file_path_properties = {}
+        
+        if "FileSystemTask" in task_type:
+            file_path_properties = {
+                "Source": "source_path",
+                "Destination": "destination_path"
+            }
+        elif "FlatFileSource" in task_type or "FlatFileDestination" in task_type:
+            file_path_properties = {
+                "FileName": "file_name",
+                "FilePath": "file_path"
+            }
+        elif "ExcelSource" in task_type or "ExcelDestination" in task_type:
+            file_path_properties = {
+                "ExcelFilePath": "excel_file_path",
+                "FileName": "file_name"
+            }
+        
+        if not file_path_properties:
+            return
+            
+        # Find task properties in the XML
+        for property_name, semantic_name in file_path_properties.items():
+            # Look for property in various XML locations
+            property_xpath_patterns = [
+                f".//property[@name='{property_name}']",
+                f".//*[@name='{property_name}']", 
+                f".//Property[@Name='{property_name}']"
+            ]
+            
+            property_value = None
+            for xpath_pattern in property_xpath_patterns:
+                property_elements = object_data_xml.xpath(xpath_pattern)
+                if property_elements:
+                    property_element = property_elements[0]
+                    property_value = property_element.get("value") or property_element.text
+                    break
+                    
+            if not property_value:
+                continue
+                
+            # Check if property value contains parameter/variable references
+            expression_result = self._resolve_expression_with_parameters(property_value)
+            
+            # Only proceed if we found parameters or variables
+            if (expression_result.get("uses_parameters") or 
+                expression_result.get("uses_variables")):
+                
+                # Update task node properties with resolved path info
+                task_node = next((n for n in nodes if n.node_id == task_id), None)
+                if task_node:
+                    task_node.properties[f"{semantic_name}_raw"] = property_value
+                    task_node.properties[f"{semantic_name}_resolved"] = expression_result.get("resolved_expression", property_value)
+                    task_node.properties[f"uses_dynamic_{semantic_name}"] = True
+                
+                # Create parameter/variable edges
+                self._create_parameter_variable_edges(
+                    expression_result,
+                    task_id,
+                    param_var_id_map,
+                    edges,
+                    property_name=property_name,
+                    component_name=f"Task_{task_id.split(':')[-1]}"
+                )
+                
+                logger.debug(f"Applied file path parameter resolution to {task_id} property {property_name}: {property_value}")
+        
+        # Handle general properties that are commonly set by expressions
+        general_properties = [
+            "Maximum", "Minimum", "InitialValue",  # For Loop containers
+            "MaxConcurrentExecutables", "DelayValidation",  # General task properties
+            "CommandTimeout", "RetainSameConnection"  # Connection-related properties
+        ]
+        
+        for property_name in general_properties:
+            property_xpath_patterns = [
+                f".//property[@name='{property_name}']",
+                f".//*[@name='{property_name}']",
+                f".//Property[@Name='{property_name}']"
+            ]
+            
+            property_value = None
+            for xpath_pattern in property_xpath_patterns:
+                property_elements = object_data_xml.xpath(xpath_pattern)
+                if property_elements:
+                    property_element = property_elements[0]
+                    property_value = property_element.get("value") or property_element.text
+                    break
+                    
+            if not property_value:
+                continue
+                
+            # Check if property value contains parameter/variable references
+            expression_result = self._resolve_expression_with_parameters(property_value)
+            
+            # Only proceed if we found parameters or variables
+            if (expression_result.get("uses_parameters") or 
+                expression_result.get("uses_variables")):
+                
+                # Update task node properties with resolved info
+                task_node = next((n for n in nodes if n.node_id == task_id), None)
+                if task_node:
+                    semantic_name = property_name.lower()
+                    task_node.properties[f"{semantic_name}_raw"] = property_value
+                    task_node.properties[f"{semantic_name}_resolved"] = expression_result.get("resolved_expression", property_value)
+                    task_node.properties[f"uses_dynamic_{semantic_name}"] = True
+                
+                # Create parameter/variable edges
+                self._create_parameter_variable_edges(
+                    expression_result,
+                    task_id,
+                    param_var_id_map,
+                    edges,
+                    property_name=property_name,
+                    component_name=f"Task_{task_id.split(':')[-1]}"
+                )
+                
+                logger.debug(f"Applied general property parameter resolution to {task_id} property {property_name}: {property_value}")
+    
+    def _parse_foreach_loop_component(
+        self,
+        object_data_xml: etree._Element,
+        task_id: str,
+        nodes: List[Node],
+        edges: List[Edge],
+        param_var_id_map: Dict[str, str],
+        task_name: str
+    ) -> None:
+        """
+        Parse Foreach Loop Container logic to extract enumerator configuration.
+        
+        REQUIREMENT 2.4: Handle Foreach Loop Container Logic
+        - Extracts enumerator type (File Enumerator, ADO Enumerator, etc.)
+        - Extracts key configuration properties based on enumerator type
+        - Applies parameter resolution to folder paths and file specs
+        - Extracts variable mappings that define iteration variables
+        """
+        if object_data_xml is None:
+            return
+        
+        # Find the ForEach enumerator configuration
+        foreach_enumerator = None
+        enumerator_type = "Unknown"
+        
+        # Look for ForeachEnumerator element in various XML locations
+        foreach_elements = object_data_xml.xpath(".//ForeachEnumerator | .//ForEachEnumerator | .//*[contains(local-name(), 'Enumerator')]")
+        if foreach_elements:
+            foreach_enumerator = foreach_elements[0]
+            enumerator_type = foreach_enumerator.get("type") or foreach_enumerator.get("Type") or "Unknown"
+        
+        # Initialize configuration dictionary
+        loop_config = {
+            "enumerator_type": enumerator_type,
+            "enumerator_properties": {},
+            "variable_mappings": [],
+            "has_dynamic_configuration": False
+        }
+        
+        # Parse enumerator-specific properties
+        if "File" in enumerator_type:
+            # Foreach File Enumerator
+            loop_config["enumerator_properties"] = self._parse_file_enumerator_properties(
+                foreach_enumerator or object_data_xml, param_var_id_map
+            )
+        elif "ADO" in enumerator_type:
+            # Foreach ADO Enumerator  
+            loop_config["enumerator_properties"] = self._parse_ado_enumerator_properties(
+                foreach_enumerator or object_data_xml, param_var_id_map
+            )
+        elif "Variable" in enumerator_type:
+            # Foreach Variable Enumerator
+            loop_config["enumerator_properties"] = self._parse_variable_enumerator_properties(
+                foreach_enumerator or object_data_xml, param_var_id_map
+            )
+        else:
+            # Generic enumerator - try to extract common properties
+            loop_config["enumerator_properties"] = self._parse_generic_enumerator_properties(
+                foreach_enumerator or object_data_xml
+            )
+        
+        # Extract variable mappings
+        loop_config["variable_mappings"] = self._parse_foreach_variable_mappings(
+            object_data_xml, param_var_id_map
+        )
+        
+        # Check if any configuration uses parameters/variables
+        if loop_config["enumerator_properties"].get("uses_parameters") or \
+           any(mapping.get("uses_parameters") for mapping in loop_config["variable_mappings"]):
+            loop_config["has_dynamic_configuration"] = True
+        
+        # Update the task node with loop configuration
+        task_node = next((n for n in nodes if n.node_id == task_id), None)
+        if task_node:
+            task_node.properties["foreach_loop_config"] = loop_config
+            task_node.properties["container_type"] = "FOREACH_LOOP"
+            
+            logger.debug(f"Parsed Foreach Loop configuration for {task_id}: {enumerator_type}")
+        
+        # Create parameter/variable edges for any dynamic configuration
+        if loop_config["has_dynamic_configuration"]:
+            self._create_foreach_parameter_edges(
+                loop_config, task_id, param_var_id_map, edges
+            )
+    
+    def _parse_file_enumerator_properties(self, enumerator_xml: etree._Element, param_var_id_map: Dict[str, str]) -> Dict[str, Any]:
+        """Parse Foreach File Enumerator properties (Folder, FileSpec)."""
+        properties = {"enumerator_subtype": "File"}
+        
+        # Look for Folder property
+        folder_patterns = [
+            ".//property[@name='Folder']", 
+            ".//Property[@Name='Folder']",
+            ".//*[@name='Folder']"
+        ]
+        
+        for pattern in folder_patterns:
+            folder_elements = enumerator_xml.xpath(pattern)
+            if folder_elements:
+                folder_value = folder_elements[0].get("value") or folder_elements[0].text
+                if folder_value:
+                    properties["folder_path"] = folder_value
+                    
+                    # Apply parameter resolution
+                    expression_result = self._resolve_expression_with_parameters(folder_value)
+                    if expression_result.get("uses_parameters") or expression_result.get("uses_variables"):
+                        properties["folder_path_resolved"] = expression_result.get("resolved_expression", folder_value)
+                        properties["uses_parameters"] = True
+                        properties["folder_parameter_info"] = expression_result
+                    break
+        
+        # Look for FileSpec property
+        filespec_patterns = [
+            ".//property[@name='FileSpec']",
+            ".//Property[@Name='FileSpec']", 
+            ".//*[@name='FileSpec']"
+        ]
+        
+        for pattern in filespec_patterns:
+            filespec_elements = enumerator_xml.xpath(pattern)
+            if filespec_elements:
+                filespec_value = filespec_elements[0].get("value") or filespec_elements[0].text
+                if filespec_value:
+                    properties["file_spec"] = filespec_value
+                    
+                    # Apply parameter resolution
+                    expression_result = self._resolve_expression_with_parameters(filespec_value)
+                    if expression_result.get("uses_parameters") or expression_result.get("uses_variables"):
+                        properties["file_spec_resolved"] = expression_result.get("resolved_expression", filespec_value)
+                        properties["uses_parameters"] = True
+                        properties["filespec_parameter_info"] = expression_result
+                    break
+        
+        return properties
+    
+    def _parse_ado_enumerator_properties(self, enumerator_xml: etree._Element, param_var_id_map: Dict[str, str]) -> Dict[str, Any]:
+        """Parse Foreach ADO Enumerator properties (ADOObjectSourceVariable)."""
+        properties = {"enumerator_subtype": "ADO"}
+        
+        # Look for ADOObjectSourceVariable
+        ado_patterns = [
+            ".//property[@name='ADOObjectSourceVariable']",
+            ".//Property[@Name='ADOObjectSourceVariable']",
+            ".//*[@name='ADOObjectSourceVariable']"
+        ]
+        
+        for pattern in ado_patterns:
+            ado_elements = enumerator_xml.xpath(pattern)
+            if ado_elements:
+                ado_value = ado_elements[0].get("value") or ado_elements[0].text
+                if ado_value:
+                    properties["ado_object_source_variable"] = ado_value
+                    
+                    # Check if this references a variable from our mapping
+                    var_key = f"variable:{ado_value}"
+                    if var_key in param_var_id_map:
+                        properties["source_variable_id"] = param_var_id_map[var_key]
+                        properties["uses_parameters"] = True
+                    break
+        
+        return properties
+    
+    def _parse_variable_enumerator_properties(self, enumerator_xml: etree._Element, param_var_id_map: Dict[str, str]) -> Dict[str, Any]:
+        """Parse Foreach Variable Enumerator properties."""
+        properties = {"enumerator_subtype": "Variable"}
+        
+        # Look for Variable name
+        var_patterns = [
+            ".//property[@name='Variable']",
+            ".//Property[@Name='Variable']",
+            ".//*[@name='Variable']"
+        ]
+        
+        for pattern in var_patterns:
+            var_elements = enumerator_xml.xpath(pattern)
+            if var_elements:
+                var_value = var_elements[0].get("value") or var_elements[0].text
+                if var_value:
+                    properties["source_variable"] = var_value
+                    
+                    # Check if this references a variable from our mapping
+                    var_key = f"variable:{var_value}"
+                    if var_key in param_var_id_map:
+                        properties["source_variable_id"] = param_var_id_map[var_key]
+                        properties["uses_parameters"] = True
+                    break
+        
+        return properties
+    
+    def _parse_generic_enumerator_properties(self, enumerator_xml: etree._Element) -> Dict[str, Any]:
+        """Parse generic enumerator properties for unknown types."""
+        properties = {"enumerator_subtype": "Generic"}
+        
+        # Extract any properties we can find
+        property_elements = enumerator_xml.xpath(".//property | .//Property")
+        for prop in property_elements:
+            prop_name = prop.get("name") or prop.get("Name")
+            prop_value = prop.get("value") or prop.text
+            if prop_name and prop_value:
+                properties[f"property_{prop_name.lower()}"] = prop_value
+        
+        return properties
+    
+    def _parse_foreach_variable_mappings(self, object_data_xml: etree._Element, param_var_id_map: Dict[str, str]) -> List[Dict[str, Any]]:
+        """Extract variable mappings that define which variable receives iteration values."""
+        mappings = []
+        
+        # Look for variable mapping elements
+        mapping_patterns = [
+            ".//VariableMapping | .//variableMapping",
+            ".//ForEachVariableMapping | .//foreachVariableMapping",
+            ".//Mapping | .//mapping"
+        ]
+        
+        for pattern in mapping_patterns:
+            mapping_elements = object_data_xml.xpath(pattern)
+            for mapping in mapping_elements:
+                mapping_info = {
+                    "variable_name": mapping.get("variableName") or mapping.get("VariableName"),
+                    "value_index": mapping.get("valueIndex") or mapping.get("ValueIndex"),
+                    "creation_name": mapping.get("creationName") or mapping.get("CreationName")
+                }
+                
+                # Check if the variable is in our mapping
+                if mapping_info["variable_name"]:
+                    var_key = f"variable:{mapping_info['variable_name']}"
+                    if var_key in param_var_id_map:
+                        mapping_info["variable_id"] = param_var_id_map[var_key]
+                        mapping_info["uses_parameters"] = True
+                
+                mappings.append(mapping_info)
+        
+        return mappings
+    
+    def _create_foreach_parameter_edges(self, loop_config: Dict[str, Any], task_id: str, param_var_id_map: Dict[str, str], edges: List[Edge]) -> None:
+        """Create parameter/variable edges for Foreach Loop dynamic configuration."""
+        
+        # Create edges for enumerator parameter usage
+        enumerator_props = loop_config.get("enumerator_properties", {})
+        
+        if enumerator_props.get("folder_parameter_info"):
+            self._create_parameter_variable_edges(
+                enumerator_props["folder_parameter_info"],
+                task_id,
+                param_var_id_map,
+                edges,
+                property_name="ForeachFolderPath",
+                component_name=f"ForEachLoop_{task_id.split(':')[-1]}"
+            )
+        
+        if enumerator_props.get("filespec_parameter_info"):
+            self._create_parameter_variable_edges(
+                enumerator_props["filespec_parameter_info"],
+                task_id,
+                param_var_id_map,
+                edges,
+                property_name="ForeachFileSpec",
+                component_name=f"ForEachLoop_{task_id.split(':')[-1]}"
+            )
+        
+        # Create edges for variable mappings
+        for mapping in loop_config.get("variable_mappings", []):
+            if mapping.get("variable_id"):
+                edges.append(Edge(
+                    source_id=task_id,
+                    target_id=mapping["variable_id"],
+                    relation=EdgeType.USES_VARIABLE,
+                    properties={
+                        "usage_type": "foreach_loop_target_variable",
+                        "variable_name": mapping.get("variable_name"),
+                        "value_index": mapping.get("value_index")
+                    }
+                ))
     
     def _get_parameter_value(self, param_name: str) -> Optional[str]:
         """

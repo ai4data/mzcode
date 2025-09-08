@@ -486,3 +486,151 @@ class SSISDataTypeMapper:
             analysis["recommendations"].append("Consider implementing automated type validation testing")
             
         return analysis
+    
+    def assess_conversion_risk(self, ssis_type: str, 
+                              length: Optional[int] = None,
+                              precision: Optional[int] = None,
+                              scale: Optional[int] = None,
+                              target_platforms: Optional[List[str]] = None) -> Dict[str, Any]:
+        """
+        Assess migration risk for SSIS data type conversions.
+        
+        REQUIREMENT 2.3: Implement assess_conversion_risk Method
+        This method evaluates potential data type conversion risks during migration.
+        
+        Args:
+            ssis_type: SSIS native data type (e.g., "DT_I4", "DT_WSTR")
+            length: Column length if applicable
+            precision: Numeric precision if applicable
+            scale: Numeric scale if applicable
+            target_platforms: List of target platform names
+            
+        Returns:
+            Dictionary containing:
+                - risk_level: "low", "medium", or "high"
+                - requires_manual_review: True or False
+                - risk_factors: List of strings explaining the risks
+        """
+        canonical_type = self.get_canonical_type(ssis_type)
+        risk_factors = []
+        risk_level = "low"
+        requires_manual_review = False
+        
+        # Default target platforms if not specified
+        if target_platforms is None:
+            target_platforms = ["sql_server", "postgresql"]
+        
+        # Convert string platform names to enums
+        platform_enums = []
+        for platform_name in target_platforms:
+            try:
+                platform_enum = TargetPlatform(platform_name)
+                platform_enums.append(platform_enum)
+            except ValueError:
+                risk_factors.append(f"Unknown target platform: {platform_name}")
+                risk_level = "high"
+                requires_manual_review = True
+        
+        # Check if SSIS type is recognized
+        if canonical_type == CanonicalDataType.UNKNOWN:
+            risk_factors.append(f"Unrecognized SSIS data type: {ssis_type}")
+            risk_level = "high"
+            requires_manual_review = True
+            return {
+                "risk_level": risk_level,
+                "requires_manual_review": requires_manual_review,
+                "risk_factors": risk_factors
+            }
+        
+        # Analyze conversion risks per target platform
+        for platform_enum in platform_enums:
+            platform_type = self.get_platform_type(canonical_type, platform_enum, length, precision, scale)
+            
+            # Check for unsupported types
+            if platform_type == "unknown":
+                risk_factors.append(f"No type mapping available for {platform_enum.value}")
+                risk_level = "high"
+                requires_manual_review = True
+                continue
+            
+            # Check for potential data truncation
+            if canonical_type in [CanonicalDataType.VARCHAR, CanonicalDataType.NVARCHAR]:
+                if length and length > 4000:
+                    risk_factors.append(f"Large string length ({length}) may cause truncation on {platform_enum.value}")
+                    if risk_level == "low":
+                        risk_level = "medium"
+                elif not length:
+                    risk_factors.append(f"String type without specified length may default to small size on {platform_enum.value}")
+                    if risk_level == "low":
+                        risk_level = "medium"
+            
+            # Check for precision loss in numeric conversions
+            if canonical_type in [CanonicalDataType.DECIMAL, CanonicalDataType.NUMERIC]:
+                if precision and precision > 28:
+                    risk_factors.append(f"High precision ({precision}) may be reduced on {platform_enum.value}")
+                    risk_level = "medium"
+                elif not precision:
+                    risk_factors.append(f"Numeric type without precision may default to lower precision on {platform_enum.value}")
+                    if risk_level == "low":
+                        risk_level = "medium"
+            
+            # Check for float precision issues
+            if canonical_type in [CanonicalDataType.REAL, CanonicalDataType.FLOAT]:
+                if platform_enum in [TargetPlatform.MYSQL, TargetPlatform.ORACLE]:
+                    risk_factors.append(f"Float precision may vary on {platform_enum.value}")
+                    if risk_level == "low":
+                        risk_level = "medium"
+            
+            # Check for GUID/UUID compatibility
+            if canonical_type == CanonicalDataType.GUID:
+                if platform_enum in [TargetPlatform.MYSQL, TargetPlatform.ORACLE]:
+                    risk_factors.append(f"GUID stored as string on {platform_enum.value}, may affect performance")
+                    if risk_level == "low":
+                        risk_level = "medium"
+            
+            # Check for datetime precision differences
+            if canonical_type in [CanonicalDataType.DATETIME, CanonicalDataType.TIMESTAMP]:
+                if platform_enum == TargetPlatform.MYSQL:
+                    risk_factors.append(f"DateTime precision may differ on {platform_enum.value}")
+                    if risk_level == "low":
+                        risk_level = "medium"
+            
+            # Check for money type conversions
+            if canonical_type == CanonicalDataType.MONEY:
+                if platform_enum != TargetPlatform.SQL_SERVER:
+                    risk_factors.append(f"Money type converted to decimal on {platform_enum.value}, may affect calculations")
+                    risk_level = "medium"
+            
+            # Check for text/blob types
+            if canonical_type in [CanonicalDataType.TEXT, CanonicalDataType.NTEXT, CanonicalDataType.IMAGE]:
+                risk_factors.append(f"Large object type ({canonical_type.value}) may have different storage characteristics on {platform_enum.value}")
+                risk_level = "medium"
+                requires_manual_review = True
+        
+        # Evaluate implicit conversion risks
+        type_category = self._get_type_category(canonical_type)
+        
+        # Check for risky implicit conversions that might be happening in transformations
+        if type_category == "string" and ssis_type.upper() in ["DT_STR", "STR"]:
+            # ANSI string to Unicode platforms
+            for platform_enum in platform_enums:
+                if platform_enum in [TargetPlatform.POSTGRESQL, TargetPlatform.MYSQL]:
+                    risk_factors.append(f"ANSI string may need Unicode conversion for {platform_enum.value}")
+                    if risk_level == "low":
+                        risk_level = "medium"
+        
+        # Special case: Check for conversion to string types (high risk)
+        if type_category == "numeric" and any("varchar" in self.get_platform_type(canonical_type, p) for p in platform_enums):
+            risk_factors.append("Numeric to string conversion detected - potential data format issues")
+            risk_level = "high"
+            requires_manual_review = True
+        
+        # Determine final manual review requirement
+        if risk_level in ["high"] or len(risk_factors) > 3:
+            requires_manual_review = True
+        
+        return {
+            "risk_level": risk_level,
+            "requires_manual_review": requires_manual_review,
+            "risk_factors": risk_factors
+        }
