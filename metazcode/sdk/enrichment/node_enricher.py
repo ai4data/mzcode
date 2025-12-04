@@ -218,16 +218,36 @@ class NodeEnricher:
     def _update_node_with_summary(self, node_id: str, summary: str):
         """
         Update node properties with LLM summary.
-        
+
         Args:
             node_id: ID of the node to update
-            summary: Generated summary text
+            summary: Generated summary text (may be JSON with llm_summary and data_domain)
         """
+        # Try to parse JSON response (new format with data_domain)
+        parsed_summary = summary
+        data_domain = None
+
+        if summary:
+            try:
+                import json
+                # Try to parse as JSON
+                parsed = json.loads(summary)
+                if isinstance(parsed, dict):
+                    parsed_summary = parsed.get("llm_summary", summary)
+                    data_domain = parsed.get("data_domain")
+            except (json.JSONDecodeError, TypeError):
+                # Not JSON, use as-is
+                parsed_summary = summary
+
         enrichment_properties = {
-            "llm_summary": summary,
+            "llm_summary": parsed_summary,
             "llm_enriched_at": datetime.utcnow().isoformat(),
             "llm_model": self.llm_client.model
         }
+
+        # Add data_domain if present
+        if data_domain:
+            enrichment_properties["data_domain"] = data_domain
         
         try:
             # Check if we're using Memgraph or NetworkX
@@ -246,19 +266,37 @@ class NodeEnricher:
                 # For Memgraph, we need to use Cypher query to update
                 # First check if the client has execute_query method
                 if hasattr(self.graph_client, 'execute_query'):
-                    query = """
-                    MATCH (n {id: $node_id})
-                    SET n.llm_summary = $summary,
-                        n.llm_enriched_at = $enriched_at,
-                        n.llm_model = $model
-                    RETURN n
-                    """
-                    params = {
-                        "node_id": node_id,
-                        "summary": summary,
-                        "enriched_at": enrichment_properties["llm_enriched_at"],
-                        "model": enrichment_properties["llm_model"]
-                    }
+                    # Build query with optional data_domain
+                    if data_domain:
+                        query = """
+                        MATCH (n {id: $node_id})
+                        SET n.llm_summary = $summary,
+                            n.llm_enriched_at = $enriched_at,
+                            n.llm_model = $model,
+                            n.data_domain = $data_domain
+                        RETURN n
+                        """
+                        params = {
+                            "node_id": node_id,
+                            "summary": parsed_summary,
+                            "enriched_at": enrichment_properties["llm_enriched_at"],
+                            "model": enrichment_properties["llm_model"],
+                            "data_domain": data_domain
+                        }
+                    else:
+                        query = """
+                        MATCH (n {id: $node_id})
+                        SET n.llm_summary = $summary,
+                            n.llm_enriched_at = $enriched_at,
+                            n.llm_model = $model
+                        RETURN n
+                        """
+                        params = {
+                            "node_id": node_id,
+                            "summary": parsed_summary,
+                            "enriched_at": enrichment_properties["llm_enriched_at"],
+                            "model": enrichment_properties["llm_model"]
+                        }
                     result = self.graph_client.execute_query(query, params)
                     logger.debug(f"Updated node {node_id} with LLM summary via Cypher")
                 else:

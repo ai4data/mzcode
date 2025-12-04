@@ -13,6 +13,7 @@ from enum import Enum
 from .base_llm_client import BaseLLMClient
 from .llm_client import OpenAIEnricher
 from .openrouter_client import OpenRouterEnricher
+from .azure_openai_client import AzureOpenAIEnricher
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,7 @@ class LLMProvider(Enum):
     """Supported LLM providers."""
     OPENAI = "openai"
     OPENROUTER = "openrouter"
+    AZURE_OPENAI = "azure_openai"
 
 
 class LLMClientFactory:
@@ -35,18 +37,21 @@ class LLMClientFactory:
     _providers: Dict[LLMProvider, Type[BaseLLMClient]] = {
         LLMProvider.OPENAI: OpenAIEnricher,
         LLMProvider.OPENROUTER: OpenRouterEnricher,
+        LLMProvider.AZURE_OPENAI: AzureOpenAIEnricher,
     }
-    
+
     # Default models for each provider
     _default_models = {
         LLMProvider.OPENAI: "gpt-4o-mini",
         LLMProvider.OPENROUTER: "deepseek/deepseek-chat",
+        LLMProvider.AZURE_OPENAI: "gpt-4o-mini",
     }
-    
+
     # Environment variable mappings
     _env_keys = {
         LLMProvider.OPENAI: "OPENAI_API_KEY",
         LLMProvider.OPENROUTER: "OPENROUTER_API_KEY",
+        LLMProvider.AZURE_OPENAI: "AZURE_OPENAI_API_KEY",
     }
     
     @classmethod
@@ -96,7 +101,7 @@ class LLMClientFactory:
         # Create client with provider-specific arguments
         if provider_enum == LLMProvider.OPENAI:
             return client_class(api_key=api_key, model=model)
-        
+
         elif provider_enum == LLMProvider.OPENROUTER:
             # OpenRouter supports additional configuration
             site_url = kwargs.get("site_url", os.getenv("OPENROUTER_SITE_URL"))
@@ -107,7 +112,20 @@ class LLMClientFactory:
                 site_url=site_url,
                 site_name=site_name
             )
-        
+
+        elif provider_enum == LLMProvider.AZURE_OPENAI:
+            # Azure OpenAI requires endpoint, api_version, and deployment
+            azure_endpoint = kwargs.get("azure_endpoint", os.getenv("AZURE_OPENAI_ENDPOINT"))
+            api_version = kwargs.get("api_version", os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview"))
+            deployment = kwargs.get("deployment", os.getenv("AZURE_OPENAI_DEPLOYMENT", model))
+            return client_class(
+                api_key=api_key,
+                model=model,
+                azure_endpoint=azure_endpoint,
+                api_version=api_version,
+                deployment=deployment
+            )
+
         else:
             # Generic fallback
             return client_class(api_key=api_key, model=model)
@@ -210,16 +228,46 @@ def create_openai_client(model: str = "gpt-4o-mini", api_key: Optional[str] = No
 
 
 def create_openrouter_client(
-    model: str = "deepseek/deepseek-chat", 
+    model: str = "deepseek/deepseek-chat",
     api_key: Optional[str] = None,
     site_url: Optional[str] = None,
     site_name: Optional[str] = None
 ) -> OpenRouterEnricher:
     """Create an OpenRouter client with default settings."""
     return LLMClientFactory.create_client(
-        "openrouter", 
-        model=model, 
+        "openrouter",
+        model=model,
         api_key=api_key,
         site_url=site_url,
         site_name=site_name
+    )
+
+
+def create_azure_openai_client(
+    model: str = "gpt-4o-mini",
+    api_key: Optional[str] = None,
+    azure_endpoint: Optional[str] = None,
+    api_version: str = "2024-12-01-preview",
+    deployment: Optional[str] = None
+) -> AzureOpenAIEnricher:
+    """
+    Create an Azure OpenAI client with default settings.
+
+    Args:
+        model: Model name for reference
+        api_key: Azure OpenAI API key (or set AZURE_OPENAI_API_KEY env var)
+        azure_endpoint: Azure endpoint URL (or set AZURE_OPENAI_ENDPOINT env var)
+        api_version: API version (default: 2024-12-01-preview)
+        deployment: Deployment name (defaults to model name)
+
+    Returns:
+        Configured AzureOpenAIEnricher instance
+    """
+    return LLMClientFactory.create_client(
+        "azure_openai",
+        model=model,
+        api_key=api_key,
+        azure_endpoint=azure_endpoint,
+        api_version=api_version,
+        deployment=deployment
     )

@@ -114,7 +114,27 @@ Describe the specific action this operation performs and its place in the data t
 - **Control Flow**: Orchestration, scheduling, error handling, notifications
 - **Data Quality**: Validation, profiling, cleansing, standardization
 
-Generate a concise llm_summary that explains what this operation accomplishes in business terms:"""
+**Data Domain Classification:**
+Classify this operation's business domain based on the data it processes:
+
+Domains:
+- FINANCE: Revenue, costs, invoices, payments, budgets, accounting
+- HR: Employees, payroll, benefits, recruitment, performance
+- SALES: Orders, customers, products, pricing, discounts
+- SUPPLY_CHAIN: Inventory, suppliers, shipping, warehousing
+- MARKETING: Campaigns, leads, conversions, analytics
+- OPERATIONS: Production, quality, maintenance, scheduling
+- CUSTOMER_SERVICE: Support tickets, complaints, SLAs
+- GENERAL: Cross-domain or unclear
+
+Generate a JSON response with both fields:
+- "llm_summary": A concise explanation of what this operation accomplishes in business terms
+- "data_domain": One of the domain values above (FINANCE, HR, SALES, SUPPLY_CHAIN, MARKETING, OPERATIONS, CUSTOMER_SERVICE, or GENERAL)
+
+Example output:
+{{"llm_summary": "Loads employee salary data for monthly payroll processing...", "data_domain": "HR"}}
+
+Response:"""
 
     def _get_technical_summary_template(self) -> str:
         """

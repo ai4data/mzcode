@@ -3,7 +3,6 @@ from enum import Enum
 
 class NodeType(str, Enum):
     """Canonical node types for technology-agnostic representation"""
-
     DIRECTORY = "directory"
     FILE = "file"
     PIPELINE = "pipeline"
@@ -17,6 +16,18 @@ class NodeType(str, Enum):
     COLUMN = "column"
     ENTITY = "entity"  # Fallback for unknown elements
     TRANSFORMATION = "transformation"
+
+    # Macro type for code generation constructs
+    # Added to support SAS macros and similar metaprogramming constructs in other
+    # technologies (e.g., dbt macros, Jinja templates in Airflow, T-SQL dynamic SQL).
+    # Macros are distinct from OPERATION because they:
+    #   1. Generate code rather than execute data transformations directly
+    #   2. Can produce different outputs based on parameters/runtime context
+    #   3. Represent reusable code templates that expand into multiple operations
+    #   4. Have their own dependency graph (macro calls macro)
+    # Properties should include: macro_name, parameters, expansion_pattern, is_deterministic
+    MACRO = "macro"
+
     # Phase 2: AI Enrichment Types
     OPERATION_SUMMARY = "operation_summary"
     PIPELINE_SUMMARY = "pipeline_summary"
