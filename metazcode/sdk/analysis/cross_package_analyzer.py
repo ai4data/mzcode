@@ -17,6 +17,41 @@ from ..graph.graph_client_interface import GraphClientInterface
 logger = logging.getLogger(__name__)
 
 
+def normalize_table_name(table_name: str) -> str:
+    """
+    Normalize table names to a consistent format for graph consistency.
+
+    This function handles various SQL Server table name formats and normalizes them
+    to a consistent schema.table format.
+
+    Examples:
+        dbo].[customer_dim → dbo.customer_dim
+        [dbo].[customer_dim] → dbo.customer_dim
+        dbo.customer_dim → dbo.customer_dim
+        [customer_dim] → customer_dim
+
+    Args:
+        table_name: The table name to normalize (without 'table:' prefix)
+
+    Returns:
+        Normalized table name in format 'schema.table' or 'table'
+    """
+    # Remove all brackets
+    normalized = table_name.replace('[', '').replace(']', '')
+
+    # Handle the case of '].' which becomes just '.'
+    normalized = normalized.replace('.', '.')  # Ensure single dots
+
+    # Clean up any double dots that might have been created
+    while '..' in normalized:
+        normalized = normalized.replace('..', '.')
+
+    # Remove leading/trailing dots
+    normalized = normalized.strip('.')
+
+    return normalized
+
+
 class CrossPackageAnalyzer:
     """
     Analyzes cross-package dependencies in an SSIS project graph.
@@ -31,6 +66,23 @@ class CrossPackageAnalyzer:
     def __init__(self, graph_client: GraphClientInterface):
         self.graph_client = graph_client
         self.graph = self._get_networkx_graph()
+
+    def _normalize_table_id(self, table_id: str) -> str:
+        """
+        Normalize a table node ID for consistent comparison.
+
+        Args:
+            table_id: Full table node ID (e.g., 'table:dbo].[customer_dim')
+
+        Returns:
+            Normalized table ID (e.g., 'table:dbo.customer_dim')
+        """
+        if not table_id.startswith('table:'):
+            return table_id
+
+        table_name = table_id.replace('table:', '', 1)
+        normalized_name = normalize_table_name(table_name)
+        return f'table:{normalized_name}'
         
     def analyze(self) -> Dict[str, Any]:
         """
@@ -159,47 +211,78 @@ class CrossPackageAnalyzer:
     
     def _analyze_shared_tables(self, packages: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
         """Identify tables that are used by multiple packages."""
-        table_usage = defaultdict(lambda: {'readers': set(), 'writers': set(), 'packages': set()})
-        
+        # Use normalized table IDs to group logically identical tables
+        table_usage = defaultdict(lambda: {
+            'readers': set(),
+            'writers': set(),
+            'packages': set(),
+            'original_ids': set(),  # Track all ID variations
+            'canonical_name': None
+        })
+
         for package in packages:
             package_id = package['id']
-            
+
             # Find all operations in this package
             package_operations = []
             for source, target, edge_data in self.graph.edges(data=True):
-                if (source == package_id and 
-                    edge_data.get('relation') == 'contains' and 
+                if (source == package_id and
+                    edge_data.get('relation') == 'contains' and
                     self.graph.nodes[target].get('node_type') == 'operation'):
                     package_operations.append(target)
-            
+
             # Analyze table usage for each operation
             for operation_id in package_operations:
                 for source, target, edge_data in self.graph.edges(data=True):
-                    if (source == operation_id and 
-                        self.graph.nodes[target].get('node_type') == 'table'):
+                    target_node_type = self.graph.nodes[target].get('node_type')
+                    # Consider both 'table' and 'data_asset' nodes as tables
+                    if (source == operation_id and
+                        target_node_type in ('table', 'data_asset')):
+
+                        # Normalize table ID for grouping
+                        normalized_id = self._normalize_table_id(target)
+
+                        # Store original ID
+                        table_usage[normalized_id]['original_ids'].add(target)
+
+                        # Store canonical name from node
+                        if table_usage[normalized_id]['canonical_name'] is None:
+                            table_node = self.graph.nodes[target]
+                            table_usage[normalized_id]['canonical_name'] = table_node.get('name', target)
+
                         relation = edge_data.get('relation')
                         if relation == 'writes_to':
-                            table_usage[target]['writers'].add(operation_id)
-                            table_usage[target]['packages'].add(package_id)
+                            table_usage[normalized_id]['writers'].add(operation_id)
+                            table_usage[normalized_id]['packages'].add(package_id)
                         elif relation == 'reads_from':
-                            table_usage[target]['readers'].add(operation_id)
-                            table_usage[target]['packages'].add(package_id)
-        
+                            table_usage[normalized_id]['readers'].add(operation_id)
+                            table_usage[normalized_id]['packages'].add(package_id)
+
         # Filter to only shared tables (used by multiple packages)
         shared_tables = {}
-        for table_id, usage in table_usage.items():
+        for normalized_id, usage in table_usage.items():
             if len(usage['packages']) > 1:
-                table_node = self.graph.nodes[table_id]
-                shared_tables[table_id] = {
-                    'table_name': table_node.get('name', table_id),
+                # Get properties from one of the original table nodes
+                first_original_id = next(iter(usage['original_ids']))
+                table_node = self.graph.nodes[first_original_id]
+
+                shared_tables[normalized_id] = {
+                    'table_name': usage['canonical_name'] or normalized_id.replace('table:', ''),
                     'packages': list(usage['packages']),
                     'readers': list(usage['readers']),
                     'writers': list(usage['writers']),
                     'is_integration_point': len(usage['writers']) > 0 and len(usage['readers']) > 0,
                     'package_count': len(usage['packages']),
-                    'properties': table_node.get('properties', {})
+                    'properties': table_node.get('properties', {}),
+                    'original_table_ids': list(usage['original_ids'])  # For debugging
                 }
-        
+
+                logger.info(f"Found shared table: {normalized_id} "
+                          f"(packages: {len(usage['packages'])}, "
+                          f"writers: {len(usage['writers'])}, "
+                          f"readers: {len(usage['readers'])}, "
+                          f"original IDs: {len(usage['original_ids'])})")
+
         return shared_tables
     
     def _analyze_shared_connections(self, packages: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:

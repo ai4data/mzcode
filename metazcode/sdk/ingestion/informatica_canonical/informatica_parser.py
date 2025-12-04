@@ -17,7 +17,9 @@ from ...models.canonical_types import NodeType, EdgeType
 from ...models.graph import Node, Edge
 from ...models.traceability import SourceContext
 from .type_mapping import InformaticaDataTypeMapper, TargetPlatform
-from ..ssis.sql_semantics import EnhancedSqlParser, SqlSemantics, create_join_edges_from_semantics
+from ..ssis_canonical.sql_semantics import EnhancedSqlParser, SqlSemantics, create_join_edges_from_semantics
+from ..informatica.parsers.column_lineage_builder import ColumnLineageBuilder, JoinerLineageBuilder, LookupLineageBuilder
+from ..informatica.parsers.error_handling_builder import ErrorHandlingBuilder
 
 logger = logging.getLogger(__name__)
 
@@ -72,9 +74,18 @@ class CanonicalInformaticaParser:
         
         # Session context for mapping session connections
         self.session_connections = {}
-        
+
         # Cache for parsed mapping files to avoid re-parsing
         self.mapping_cache = {}
+
+        # Connection ID map for creating USES_CONNECTION edges
+        self.connection_id_map = {}
+
+        # Initialize enhancement builders (Enhancements #1-5)
+        self.column_lineage_builder = ColumnLineageBuilder()
+        self.joiner_lineage_builder = JoinerLineageBuilder()
+        self.lookup_lineage_builder = LookupLineageBuilder()
+        self.error_handling_builder = ErrorHandlingBuilder()
 
     def _parse_target_platforms(self, platforms: List[str]) -> List[TargetPlatform]:
         """Parse string platform names to TargetPlatform enums."""
@@ -86,6 +97,92 @@ class CanonicalInformaticaParser:
                 logger.warning(f"Unknown target platform: {platform}")
         return parsed
 
+    def _add_enhancements_to_transformation(
+        self,
+        properties: Dict[str, Any],
+        transformation_element: Optional[etree._Element],
+        transformation_type: str,
+        instance_name: str,
+    ) -> Dict[str, Any]:
+        """
+        Add all enhancements (column lineage, error handling) to transformation properties.
+
+        This is a helper method that can be called from any transformation parser to add
+        the new enhancement features without duplicating code.
+
+        Args:
+            properties: Existing properties dictionary
+            transformation_element: XML element with transformation definition
+            transformation_type: Type of transformation (Expression, Joiner, etc.)
+            instance_name: Instance name
+
+        Returns:
+            Enhanced properties dictionary
+        """
+        if transformation_element is None:
+            return properties
+
+        # Enhancement #1 & #4: Add column lineage with friendly expressions
+        trans_type_lower = transformation_type.lower()
+
+        if "joiner" in trans_type_lower:
+            lineage_builder = self.joiner_lineage_builder
+        elif "lookup" in trans_type_lower:
+            lineage_builder = self.lookup_lineage_builder
+        else:
+            lineage_builder = self.column_lineage_builder
+
+        column_lineage = lineage_builder.build_lineage(
+            transformation_element=transformation_element,
+            transformation_type=transformation_type,
+            instance_name=instance_name,
+        )
+        if column_lineage:
+            properties["column_lineage"] = column_lineage
+
+        # Enhancement #5: Add error handling metadata
+        error_handling = self.error_handling_builder.build_error_handling_metadata(
+            transformation_element=transformation_element,
+            transformation_type=transformation_type,
+            instance_name=instance_name,
+            properties=properties,
+        )
+        if error_handling:
+            properties["error_handling"] = error_handling
+
+        return properties
+
+
+    def _create_uses_connection_edge(
+        self,
+        operation_id: str,
+        properties: Dict[str, Any],
+        edges: List[Edge]
+    ) -> None:
+        """
+        Helper method to create USES_CONNECTION edge if operation uses a connection.
+
+        Args:
+            operation_id: ID of the operation node
+            properties: Operation properties dictionary
+            edges: List to append the edge to
+        """
+        # Check for connection_name in properties (could be from session context or direct)
+        connection_name = properties.get("connection_name", "") or properties.get("session_connection", "")
+
+        if connection_name and connection_name in self.connection_id_map:
+            uses_conn_edge = Edge(
+                source_id=operation_id,
+                target_id=self.connection_id_map[connection_name],
+                relation=EdgeType.USES_CONNECTION,
+                properties={
+                    "connection_name": connection_name,
+                    "derivation_method": "session_context",
+                    "confidence_level": "high"
+                }
+            )
+            edges.append(uses_conn_edge)
+            logger.debug(f"Created USES_CONNECTION edge: {operation_id} -> connection:{connection_name}")
 
     def _categorize_operation_subtype(self, transformation_type: str) -> str:
         """
@@ -213,18 +310,27 @@ class CanonicalInformaticaParser:
         """
         nodes = []
         edges = []
-        
-        # Parse workflows first to extract session information
+
+        # FIRST: Extract and create connection nodes from workflow
+        connection_nodes, connection_id_map = self._parse_connections_from_workflow(
+            workflow_root, workflow_file_path
+        )
+        nodes.extend(connection_nodes)
+
+        # Store connection map for later use when creating edges
+        self.connection_id_map = connection_id_map
+
+        # Parse workflows to extract session information
         workflow_nodes, workflow_edges = self._parse_workflows(workflow_root, workflow_file_path)
         nodes.extend(workflow_nodes)
         edges.extend(workflow_edges)
-        
+
         # Parse mappings if available
         if mapping_root is not None:
             mapping_nodes, mapping_edges = self._parse_mappings(mapping_root, mapping_file_path)
             nodes.extend(mapping_nodes)
             edges.extend(mapping_edges)
-        
+
         yield nodes, edges
 
     def _parse_workflows(
@@ -247,6 +353,79 @@ class CanonicalInformaticaParser:
             edges.extend(workflow_edges)
         
         return nodes, edges
+
+    def _parse_connections_from_workflow(
+        self,
+        workflow_root: etree._Element,
+        file_path: str
+    ) -> Tuple[List[Node], Dict[str, str]]:
+        """
+        Extract and create connection nodes from workflow CONNECTIONREFERENCE elements.
+
+        Args:
+            workflow_root: Root element of workflow XML
+            file_path: Path to workflow file
+
+        Returns:
+            Tuple of (connection_nodes, connection_id_map)
+        """
+        connection_nodes = []
+        connection_id_map = {}
+        connection_names = set()
+
+        # Find all CONNECTIONREFERENCE elements in the workflow
+        conn_refs = workflow_root.xpath(".//CONNECTIONREFERENCE")
+
+        for conn_ref in conn_refs:
+            connection_name = conn_ref.get("CONNECTIONNAME", "")
+            connection_type = conn_ref.get("CONNECTIONTYPE", "")
+            connection_subtype = conn_ref.get("CONNECTIONSUBTYPE", "")
+
+            if not connection_name or connection_name in connection_names:
+                continue
+
+            connection_names.add(connection_name)
+            conn_id = f"connection:{connection_name}"
+
+            # Build connection properties
+            properties = {
+                "technology": "Informatica",
+                "connection_type": connection_type,
+                "connection_subtype": connection_subtype,
+                **SourceContext.create_node_traceability(
+                    source_file_path=file_path,
+                    source_file_type="xml",
+                    xml_path=f"//CONNECTIONREFERENCE[@CONNECTIONNAME='{connection_name}']"
+                )
+            }
+
+            # Enrich with connection context if available
+            if connection_name in self.connections_context:
+                conn_data = self.connections_context[connection_name]
+                properties.update({
+                    "server": conn_data.get("server", ""),
+                    "database": conn_data.get("database", ""),
+                    "username": conn_data.get("username", ""),
+                    "port": conn_data.get("port", ""),
+                    "file_path": conn_data.get("file_path", ""),
+                })
+
+            # Create connection node
+            connection_nodes.append(
+                Node(
+                    node_id=conn_id,
+                    node_type=NodeType.CONNECTION,
+                    name=connection_name,
+                    properties=properties,
+                )
+            )
+
+            # Map connection name to node ID
+            connection_id_map[connection_name] = conn_id
+
+        logger.info(f"Created {len(connection_nodes)} connection nodes from workflow")
+
+        return connection_nodes, connection_id_map
 
     def _parse_workflow(
         self, 
@@ -681,13 +860,15 @@ class CanonicalInformaticaParser:
         # Extract connection references from session extensions
         session_extensions = session.xpath(".//SESSIONEXTENSION")
         for ext in session_extensions:
+            # Get SINSTANCENAME from the SESSIONEXTENSION element (not from CONNECTIONREFERENCE)
+            instance_name = ext.get("SINSTANCENAME", "")
+
             conn_refs = ext.xpath(".//CONNECTIONREFERENCE")
             for conn_ref in conn_refs:
-                instance_name = conn_ref.get("INSTANCENAME", "")
                 connection_name = conn_ref.get("CONNECTIONNAME", "")
                 if instance_name and connection_name:
                     session_context["connections"][instance_name] = connection_name
-                    logger.debug(f"Session {session_name}: Connection override {instance_name} -> {connection_name}")
+                    logger.debug(f"Session {session_name}: Connection mapping {instance_name} -> {connection_name}")
         
         # REQUIREMENT 3.1: Extract comprehensive session-level attribute overrides
         attributes = session.xpath(".//ATTRIBUTE")
@@ -1375,9 +1556,11 @@ class CanonicalInformaticaParser:
             
             # Store instance nodes for later connector parsing
             if instance_nodes_list:
-                instance_name = instance.get("INSTANCENAME", "")
+                # Use same logic as _get_effective_instance_name - check both NAME and INSTANCENAME
+                instance_name = instance.get("NAME", "") or instance.get("INSTANCENAME", "")
                 if instance_name:
                     instance_nodes[instance_name] = instance_nodes_list[0]
+                    logger.debug(f"Registered instance node: {instance_name} -> {instance_nodes_list[0].node_id}")
         
         # Parse connectors (data flow connections)
         connectors = mapping.xpath(".//CONNECTOR")
@@ -1411,7 +1594,10 @@ class CanonicalInformaticaParser:
             mapping, mapping_id, file_path, nodes
         )
         edges.extend(target_load_order_edges)
-        
+
+        # Aggregate field mappings from connectors
+        edges = self._aggregate_field_mappings(edges)
+
         return nodes, edges
 
     def _parse_transformation_instance(
@@ -1692,8 +1878,105 @@ class CanonicalInformaticaParser:
         else:
             logger.warning(f"Incomplete connector: FROMINSTANCE='{from_instance}' "
                           f"TOINSTANCE='{to_instance}'")
-        
+
         return edges
+
+    def _aggregate_field_mappings(self, edges: List[Edge]) -> List[Edge]:
+        """
+        Aggregate field mappings for edges between the same source and target.
+
+        For connectors that have FROMFIELD/TOFIELD information, we want to combine
+        multiple edges (one per field) into a single edge with a field_mappings array.
+
+        Example:
+        Input: 3 edges from TransformA to TransformB, each with one field mapping
+        Output: 1 edge from TransformA to TransformB with 3 field mappings
+
+        Args:
+            edges: List of edges from connector parsing
+
+        Returns:
+            List of edges with aggregated field mappings
+        """
+        from collections import defaultdict
+
+        # Group edges by (source_id, target_id, relation)
+        edge_groups = defaultdict(list)
+        non_connector_edges = []
+
+        # Debug counters
+        connector_count = 0
+        with_fields_count = 0
+
+        for edge in edges:
+            # Check if it's a connector edge
+            is_connector = edge.properties.get("connector_type") == "data_flow"
+            has_from_field = bool(edge.properties.get("from_field"))
+            has_to_field = bool(edge.properties.get("to_field"))
+
+            if is_connector:
+                connector_count += 1
+
+            # Only aggregate connector edges that have field information
+            if is_connector and has_from_field and has_to_field:
+                with_fields_count += 1
+                key = (edge.source_id, edge.target_id, edge.relation)
+                edge_groups[key].append(edge)
+            else:
+                # Keep non-connector edges as-is
+                non_connector_edges.append(edge)
+
+        logger.debug(f"Aggregation input: {len(edges)} total edges, {connector_count} connector edges, "
+                    f"{with_fields_count} with field mappings")
+
+        # Aggregate field mappings for grouped edges
+        aggregated_edges = []
+
+        for (source_id, target_id, relation), edge_list in edge_groups.items():
+            if len(edge_list) == 1:
+                # Only one field mapping, keep the edge as-is
+                aggregated_edges.append(edge_list[0])
+            else:
+                # Multiple field mappings, aggregate them
+                field_mappings = []
+                base_edge = edge_list[0]
+
+                for edge in edge_list:
+                    from_field = edge.properties.get("from_field", "")
+                    to_field = edge.properties.get("to_field", "")
+
+                    if from_field and to_field:
+                        field_mappings.append({
+                            "from_field": from_field,
+                            "to_field": to_field,
+                            "transformation": "passthrough"  # Default, can be enhanced
+                        })
+
+                # Create aggregated edge with field_mappings array
+                aggregated_properties = base_edge.properties.copy()
+
+                # Remove individual field properties
+                aggregated_properties.pop("from_field", None)
+                aggregated_properties.pop("to_field", None)
+                aggregated_properties.pop("column_lineage", None)
+
+                # Add field_mappings array
+                aggregated_properties["field_mappings"] = field_mappings
+                aggregated_properties["field_count"] = len(field_mappings)
+
+                aggregated_edge = Edge(
+                    source_id=source_id,
+                    target_id=target_id,
+                    relation=relation,
+                    properties=aggregated_properties
+                )
+                aggregated_edges.append(aggregated_edge)
+
+                logger.debug(f"Aggregated {len(field_mappings)} field mappings: "
+                           f"{source_id} -> {target_id}")
+
+        # Combine aggregated edges with non-connector edges
+        return aggregated_edges + non_connector_edges
 
     def _extract_sql_semantics(self, sql_or_expression: str, context_name: str = "") -> Dict[str, Any]:
         """
@@ -1974,7 +2257,10 @@ class CanonicalInformaticaParser:
             properties=enhanced_properties
         )
         nodes.append(node)
-        
+
+        # Create USES_CONNECTION edge if connection is specified
+        self._create_uses_connection_edge(instance_id, enhanced_properties, edges)
+
         # Create containment edge
         containment_edge = Edge(
             source_id=mapping_id,
@@ -1983,7 +2269,7 @@ class CanonicalInformaticaParser:
             properties={"source_context": source_context}
         )
         edges.append(containment_edge)
-        
+
         # CRITICAL: Create READS_FROM edge to the DATA_ASSET source node
         if associated_source:
             # Reference the actual DATA_ASSET node created for this source
@@ -2035,10 +2321,71 @@ class CanonicalInformaticaParser:
     ) -> Tuple[List[Node], List[Edge]]:
         """
         Handles Target Definition instances.
-        This is a passthrough method. The instance itself does not become a node;
-        the final WRITES_TO edge is created by the _parse_connector method.
+
+        CRITICAL FIX: Target instances can have different names from their definitions
+        (e.g., definition="SRTTRANS", instance="SRTTRANS1"). Connectors reference
+        the instance name, so we must create DATA_ASSET nodes for each instance.
         """
-        return [], []
+        nodes = []
+        edges = []
+
+        # Get instance name (what connectors will reference)
+        instance_name = instance.get("INSTANCENAME") or instance.get("NAME", "")
+        if not instance_name:
+            return nodes, edges
+
+        # Get the transformation definition name (the TARGET definition)
+        transformation_name = instance.get("TRANSFORMATIONNAME") or instance.get("NAME", "")
+
+        # Create source context for traceability
+        source_context = SourceContext.create_node_traceability(
+            source_file_path=file_path,
+            line_number=instance.sourceline or 0,
+            source_file_type="xml",
+            xml_path=f"//INSTANCE[@NAME='{instance_name}'][@TRANSFORMATION_TYPE='Target Definition']",
+            technology="Informatica"
+        )
+
+        # Build properties - get metadata from transformation definition if available
+        properties = {
+            "name": instance_name,
+            "transformation_name": transformation_name,
+            "informatica_type": "target",
+            "asset_type": "table",
+            "source_context": source_context
+        }
+
+        # Enrich with target definition metadata if available
+        transformation_element = transformation_def.get("element")
+        if transformation_element is not None:
+            properties["database_type"] = transformation_element.get("DATABASETYPE", "")
+            properties["description"] = transformation_element.get("DESCRIPTION", "")
+
+            # Parse field information from TARGET definition
+            fields = self._parse_target_fields(transformation_element)
+            if fields:
+                properties["fields"] = fields
+
+        # Check session context for connection override
+        connection_name = session_context.get("connections", {}).get(instance_name, "")
+        if connection_name:
+            properties["session_connection"] = connection_name
+            properties["has_session_overrides"] = True
+            logger.debug(f"Target instance {instance_name} uses session connection: {connection_name}")
+
+        # Create DATA_ASSET node for this target instance
+        target_id = f"data_asset:target:{instance_name}"
+        target_node = Node(
+            node_id=target_id,
+            node_type=NodeType.DATA_ASSET.value,
+            name=instance_name,
+            properties=properties
+        )
+        nodes.append(target_node)
+
+        logger.debug(f"Created target instance DATA_ASSET: {target_id}")
+
+        return nodes, edges
 
     def _parse_expression_transformation(
         self,
@@ -2100,31 +2447,58 @@ class CanonicalInformaticaParser:
         # Extract SQL semantics from expressions
         combined_expression_text = " | ".join(combined_expressions) if combined_expressions else ""
         sql_semantics_result = self._extract_sql_semantics(
-            combined_expression_text, 
+            combined_expression_text,
             f"Expression transformation: {instance_name}"
         )
-        
+
+        # Build enhanced properties
+        properties = {
+            "name": instance_name,
+            "transformation_name": transformation_name,
+            "transformation_type": "Expression",
+            "operation_subtype": self._categorize_operation_subtype("Expression"),
+            "expressions": expressions,
+            "unconnected_lookups": unconnected_lookups,
+            "variable_references": variable_references,  # REQUIREMENT 2.2: Variable references found in expressions
+            "sql_semantics": sql_semantics_result.get("sql_semantics"),
+            "has_sql": sql_semantics_result.get("has_sql", False),
+            "sql_type": sql_semantics_result.get("sql_type", "expression"),
+            "source_context": source_context,
+            "informatica_type": "expression"
+        }
+
+        # Enhancement #1: Add column lineage
+        if transformation_element is not None:
+            column_lineage = self.column_lineage_builder.build_lineage(
+                transformation_element=transformation_element,
+                transformation_type="Expression",
+                instance_name=instance_name,
+            )
+            if column_lineage:
+                properties["column_lineage"] = column_lineage
+
+        # Enhancement #5: Add error handling metadata
+        if transformation_element is not None:
+            error_handling = self.error_handling_builder.build_error_handling_metadata(
+                transformation_element=transformation_element,
+                transformation_type="Expression",
+                instance_name=instance_name,
+                properties=properties,
+            )
+            if error_handling:
+                properties["error_handling"] = error_handling
+
         node = Node(
             node_id=instance_id,
             node_type=NodeType.OPERATION.value,
             name=instance_name,
-            properties={
-                "name": instance_name,
-                "transformation_name": transformation_name,
-                "transformation_type": "Expression",
-                "operation_subtype": self._categorize_operation_subtype("Expression"),
-                "expressions": expressions,
-                "unconnected_lookups": unconnected_lookups,
-                "variable_references": variable_references,  # REQUIREMENT 2.2: Variable references found in expressions
-                "sql_semantics": sql_semantics_result.get("sql_semantics"),
-                "has_sql": sql_semantics_result.get("has_sql", False),
-                "sql_type": sql_semantics_result.get("sql_type", "expression"),
-                "source_context": source_context,
-                "informatica_type": "expression"
-            }
+            properties=properties
         )
         nodes.append(node)
-        
+
+        # Create USES_CONNECTION edge if connection is specified
+        self._create_uses_connection_edge(instance_id, properties, edges)
+
         # Create containment edge
         containment_edge = Edge(
             source_id=mapping_id,
@@ -2133,7 +2507,7 @@ class CanonicalInformaticaParser:
             properties={"source_context": source_context}
         )
         edges.append(containment_edge)
-        
+
         # Create edges for unconnected lookups (only if lookup nodes exist or will be created)
         for lookup_name in unconnected_lookups:
             lookup_id = f"{mapping_id}:lookup:{lookup_name}"
@@ -2199,29 +2573,53 @@ class CanonicalInformaticaParser:
         
         # Extract SQL semantics from join condition
         sql_semantics_result = self._extract_sql_semantics(
-            join_condition, 
+            join_condition,
             f"Joiner transformation: {instance_name} ({join_type})"
         )
-        
+
+        # Build enhanced properties
+        properties = {
+            "name": instance_name,
+            "transformation_name": transformation_name,
+            "transformation_type": "Joiner",
+            "operation_subtype": self._categorize_operation_subtype("Joiner"),
+            "join_condition": join_condition,
+            "join_type": join_type,
+            "master_source": master_source,
+            "detail_source": detail_source,
+            "sql_semantics": sql_semantics_result.get("sql_semantics"),
+            "has_sql": sql_semantics_result.get("has_sql", False),
+            "sql_type": sql_semantics_result.get("sql_type", "expression"),
+            "source_context": source_context,
+            "informatica_type": "joiner"
+        }
+
+        # Enhancement #1: Add column lineage (with joiner-specific builder)
+        if transformation_element is not None:
+            column_lineage = self.joiner_lineage_builder.build_lineage(
+                transformation_element=transformation_element,
+                transformation_type="Joiner",
+                instance_name=instance_name,
+            )
+            if column_lineage:
+                properties["column_lineage"] = column_lineage
+
+        # Enhancement #5: Add error handling metadata
+        if transformation_element is not None:
+            error_handling = self.error_handling_builder.build_error_handling_metadata(
+                transformation_element=transformation_element,
+                transformation_type="Joiner",
+                instance_name=instance_name,
+                properties=properties,
+            )
+            if error_handling:
+                properties["error_handling"] = error_handling
+
         node = Node(
             node_id=instance_id,
             node_type=NodeType.OPERATION.value,
             name=instance_name,
-            properties={
-                "name": instance_name,
-                "transformation_name": transformation_name,
-                "transformation_type": "Joiner",
-                "operation_subtype": self._categorize_operation_subtype("Joiner"),
-                "join_condition": join_condition,
-                "join_type": join_type,
-                "master_source": master_source,
-                "detail_source": detail_source,
-                "sql_semantics": sql_semantics_result.get("sql_semantics"),
-                "has_sql": sql_semantics_result.get("has_sql", False),
-                "sql_type": sql_semantics_result.get("sql_type", "expression"),
-                "source_context": source_context,
-                "informatica_type": "joiner"
-            }
+            properties=properties
         )
         nodes.append(node)
         

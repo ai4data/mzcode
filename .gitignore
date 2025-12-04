@@ -16,11 +16,14 @@ build/
   .venv/
 
 # IDE
-  .claude/
-  .vscode/
-  .idea/
-  *.swp
-  *.swo
+.claude/
+.vscode/
+.idea/
+.vs/
+*.swp
+*.swo
+*.suo
+*.user
 
 # Test and analysis scripts (not needed for runtime)
   test_*.py

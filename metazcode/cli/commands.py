@@ -623,7 +623,7 @@ def ingest_n_index(
 @click.option(
     "--provider",
     default="openai",
-    help="LLM provider to use when --enable-llm is set (openai, openrouter).",
+    help="LLM provider to use when --enable-llm is set (openai, openrouter, azure_openai).",
 )
 @click.option(
     "--model",
@@ -898,7 +898,7 @@ def full(
 
         # Always save enhanced graph
         enhanced_graph_path = Path("enhanced_graph_full_analysis.json")
-        
+
         # Handle different graph client types
         try:
             graph = graph_client.get_graph()
@@ -909,17 +909,17 @@ def full(
                 # For Memgraph, create a custom export
                 all_nodes = graph_client.get_all_nodes()
                 nodes_data = [node.to_dict() for node in all_nodes]
-                
+
                 # Get edges via custom query
                 connection = graph_client.get_graph()
                 cursor = connection.cursor()
                 cursor.execute("""
                     MATCH (source)-[r]->(target)
-                    RETURN source.id as source_id, target.id as target_id, 
+                    RETURN source.id as source_id, target.id as target_id,
                            type(r) as relation_type, properties(r) as properties
                 """)
                 edge_results = cursor.fetchall()
-                
+
                 edges_data = []
                 for source_id, target_id, relation_type, properties in edge_results:
                     edge_dict = {
@@ -929,16 +929,36 @@ def full(
                         "properties": properties if properties else {}
                     }
                     edges_data.append(edge_dict)
-                
+
                 graph_data = {
                     "nodes": nodes_data,
                     "links": edges_data,
-                    "metadata": {
-                        "node_count": len(nodes_data),
-                        "edge_count": len(edges_data),
-                        "graph_type": "memgraph"
-                    }
                 }
+
+            # Add comprehensive metadata block
+            graph_data["metadata"] = {
+                "raw_node_count": initial_nodes,
+                "raw_edge_count": initial_edges,
+                "final_node_count": final_nodes,
+                "final_edge_count": final_edges,
+                "post_processing_enabled": True,
+                "post_processing_stats": {
+                    "cleanup_stats": {
+                        "nodes_before": initial_nodes,
+                        "nodes_after": final_nodes,
+                        "nodes_removed": 0,  # No cleanup phase in current implementation
+                        "edges_before": initial_edges,
+                        "edges_after": final_edges,
+                        "edges_removed": 0,
+                        "edges_rewired": 0
+                    },
+                    "cross_package_stats": analysis_results,
+                    "node_enrichment_stats": {},  # Reserved for LLM enrichment stats
+                    "edge_enrichment_stats": {},  # Reserved for edge enrichment
+                    "total_processing_time": 0.0  # Could be tracked with time module
+                }
+            }
+
         except Exception as e:
             click.echo(f"Warning: Could not export graph data: {e}")
             graph_data = {"error": str(e), "nodes": [], "links": []}
@@ -1006,7 +1026,7 @@ def full(
 @click.option(
     "--provider",
     default="openai",
-    help="LLM provider to use (openai, openrouter).",
+    help="LLM provider to use (openai, openrouter, azure_openai).",
 )
 @click.option(
     "--model",
@@ -1171,7 +1191,7 @@ def enrich(
 @click.option(
     "--provider",
     default="openai",
-    help="LLM provider to use when --enable-llm is set (openai, openrouter).",
+    help="LLM provider to use when --enable-llm is set (openai, openrouter, azure_openai).",
 )
 @click.option(
     "--model",
