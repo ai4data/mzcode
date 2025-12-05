@@ -39,6 +39,7 @@ dependencies = [
     "pymgclient>=1.3.0",
     "neo4j>=5.0.0",
     "openai>=1.99.9",
+    "antlr4-python3-runtime>=4.13.0",
 ]
 
 [project.scripts]
