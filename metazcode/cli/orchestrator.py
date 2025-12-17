@@ -28,12 +28,20 @@ class Orchestrator:
         """
         import metazcode.sdk.ingestion as ingestion_module
 
+        # Track discovered classes to avoid duplicates from multiple import paths
+        discovered_classes = set()
+
         for _, name, _ in pkgutil.walk_packages(
             ingestion_module.__path__, ingestion_module.__name__ + "."
         ):
             module = __import__(name, fromlist=[""])
             for _, obj in inspect.getmembers(module, inspect.isclass):
                 if issubclass(obj, IngestionTool) and obj is not IngestionTool:
+                    # Skip if we've already discovered this class
+                    if obj in discovered_classes:
+                        continue
+                    discovered_classes.add(obj)
+
                     # Check if the loader accepts the 'target_file' argument
                     sig = inspect.signature(obj.__init__)
                     if "target_file" in sig.parameters:

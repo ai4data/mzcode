@@ -852,6 +852,7 @@ class CanonicalSasParser:
                 **SourceContext.create_node_traceability(
                     source_file_path=file_path,
                     source_file_type="sas",
+                    technology="SAS",
                 )
             }
         ))
