@@ -516,7 +516,7 @@ def ingest_n_index(
     Run both ingestion and indexing together.
 
     This command performs the complete workflow of data ingestion followed by
-    enhanced SSIS indexing for fast search and analysis capabilities.
+    enhanced ETL indexing for fast search and analysis capabilities.
     """
     click.echo(
         f"Starting integrated ingestion and indexing for: {os.path.abspath(path)}"
@@ -551,7 +551,7 @@ def ingest_n_index(
         if "ssis_enhancements" in index_stats:
             ssis_stats = index_stats["ssis_enhancements"]
             click.echo(f"")
-            click.echo(f"SSIS Business Logic Indexing:")
+            click.echo(f"ETL Business Logic Indexing:")
             click.echo(
                 f"  - SQL operations indexed: {ssis_stats['sql_operations_indexed']}"
             )
@@ -575,7 +575,7 @@ def ingest_n_index(
 
         click.echo(f"")
         click.echo(
-            f"[SUCCESS] Enhanced SSIS indexing complete. Graph is now searchable!"
+            f"[SUCCESS] Enhanced ETL indexing complete. Graph is now searchable!"
         )
 
     except Exception as e:
@@ -647,15 +647,15 @@ def full(
     memgraph_password: Optional[str],
 ):
     """
-    Complete SSIS analysis: ingest + analyze + index in one command.
+    Complete ETL analysis: ingest + analyze + index in one command.
 
     This command performs the full MetaZenseCode workflow:
-    1. Ingests SSIS packages and extracts business logic
+    1. Ingests ETL packages (SSIS, SAS, Informatica, PL/SQL) and extracts business logic
     2. Performs cross-package dependency analysis
     3. Creates enhanced searchable index
     4. Exports rich graph with enterprise intelligence
 
-    Perfect for users who want complete SSIS analysis without running separate commands.
+    Perfect for users who want complete ETL analysis without running separate commands.
 
     Example: metazcode full --path ./data/ssis/project --output analysis.json
     """
@@ -665,7 +665,7 @@ def full(
     else:
         logging.basicConfig(level=logging.INFO)
 
-    click.echo("Starting Complete SSIS Analysis (Ingest + Analyze + Index)")
+    click.echo("Starting Complete ETL Analysis (Ingest + Analyze + Index)")
     click.echo("=" * 70)
     click.echo(f"Project path: {os.path.abspath(path)}")
 
@@ -686,7 +686,7 @@ def full(
     try:
         # Phase 1: Ingestion
         click.echo("")
-        click.echo("Phase 1: SSIS Ingestion (Building Graph)")
+        click.echo("Phase 1: ETL Ingestion (Building Graph)")
         click.echo("-" * 50)
 
         # Build the graph client with configuration
@@ -842,7 +842,7 @@ def full(
             ssis_stats = index.get_ssis_enhancement_stats()
             if ssis_stats:
                 click.echo(f"")
-                click.echo(f"SSIS Business Logic Indexing:")
+                click.echo(f"ETL Business Logic Indexing:")
                 click.echo(
                     f"   SQL operations: {ssis_stats.get('sql_operations_indexed', 0)}"
                 )
@@ -1056,7 +1056,7 @@ def enrich(
     """
     Run LLM enrichment on an existing graph.
     
-    This command adds AI-generated business summaries to SSIS operations and
+    This command adds AI-generated business summaries to ETL operations and
     pipelines, enriching the graph with human-readable context for migration
     planning and documentation.
     
@@ -1214,7 +1214,7 @@ def complete(
     memgraph_password: Optional[str],
 ):
     """
-    Alias for 'full' command - complete SSIS analysis in one shot.
+    Alias for 'full' command - complete ETL analysis in one shot.
 
     Shorter command for: ingest + analyze + index
 

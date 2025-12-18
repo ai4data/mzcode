@@ -29,9 +29,9 @@ class SSISEnhancedHierarchicalIndex(HierarchicalEntityIndex):
     
     def __init__(self, graph_client: GraphClientInterface):
         """Initialize SSIS enhanced hierarchical index."""
-        logger.info("Initializing SSIS Enhanced Hierarchical Index...")
+        logger.info("Initializing Enhanced Hierarchical Index...")
         super().__init__(graph_client)
-        logger.info("SSIS Enhanced Hierarchical Index initialized successfully")
+        logger.info("Enhanced Hierarchical Index initialized successfully")
     
     def _get_key_properties_for_node_type(self, node_type: str) -> List[str]:
         """
