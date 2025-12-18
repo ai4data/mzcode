@@ -354,11 +354,11 @@ def analyze(
 
     Example: metazcode analyze --path ./data/ssis/project --output analysis.json
     """
-    # Setup logging
+    # Setup logging - WARNING by default, INFO with --verbose
     if verbose:
-        logging.basicConfig(level=logging.DEBUG)
-    else:
         logging.basicConfig(level=logging.INFO)
+    else:
+        logging.basicConfig(level=logging.WARNING)
 
     click.echo(
         f"[START] Starting cross-package dependency analysis for: {os.path.abspath(path)}"
@@ -659,11 +659,11 @@ def full(
 
     Example: metazcode full --path ./data/ssis/project --output analysis.json
     """
-    # Setup logging
+    # Setup logging - WARNING by default, INFO with --verbose
     if verbose:
-        logging.basicConfig(level=logging.DEBUG)
-    else:
         logging.basicConfig(level=logging.INFO)
+    else:
+        logging.basicConfig(level=logging.WARNING)
 
     click.echo("Starting Complete ETL Analysis (Ingest + Analyze + Index)")
     click.echo("=" * 70)
@@ -1062,11 +1062,11 @@ def enrich(
     
     Example: metazcode enrich --path ./data/ssis/project
     """
-    # Setup logging
+    # Setup logging - WARNING by default, INFO with --verbose
     if verbose:
-        logging.basicConfig(level=logging.DEBUG)
-    else:
         logging.basicConfig(level=logging.INFO)
+    else:
+        logging.basicConfig(level=logging.WARNING)
 
     click.echo(f"🤖 Starting LLM enrichment for: {os.path.abspath(path)}")
     
